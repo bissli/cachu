@@ -12,7 +12,7 @@ from dogpile.cache.backends.file import AbstractFileLock
 from dogpile.cache.region import DefaultInvalidationStrategy
 from dogpile.util.readwrite_lock import ReadWriteMutex
 
-from .config import get_config
+from .config import config
 
 logger = logging.getLogger(__name__)
 
@@ -63,8 +63,7 @@ def _create_namespace_filter(namespace: str) -> Callable[[str], bool]:
     Returns
         A function that returns True if a key matches the namespace.
     """
-    _config = get_config()
-    debug_prefix = _config.debug_key
+    debug_prefix = config.debug_key
     normalized_ns = _normalize_namespace(namespace)
     namespace_pattern = f'|{normalized_ns}|'
 
@@ -122,8 +121,7 @@ def key_mangler_default(key: str) -> str:
     Returns
         A modified cache key with the debug marker prepended.
     """
-    _config = get_config()
-    return f'{_config.debug_key}{key}'
+    return f'{config.debug_key}{key}'
 
 
 def key_mangler_region(key: str, region: str) -> str:
@@ -136,8 +134,7 @@ def key_mangler_region(key: str, region: str) -> str:
     Returns
         A modified cache key that includes the region prefix and debug marker.
     """
-    _config = get_config()
-    return f'{region}:{_config.debug_key}{key}'
+    return f'{region}:{config.debug_key}{key}'
 
 
 def should_cache_fn(value: Any) -> bool:
@@ -171,21 +168,20 @@ def _seconds_to_region_name(seconds: int) -> str:
         return f'{seconds // 86400}d'
 
 
-def _get_redis_client():
+def get_redis_client():
     """Create a Redis client directly from config.
 
     Returns
         A redis.Redis client instance.
     """
     import redis
-    _config = get_config()
     connection_kwargs = {}
-    if _config.redis_ssl:
+    if config.redis_ssl:
         connection_kwargs['ssl'] = True
     return redis.Redis(
-        host=_config.redis_host,
-        port=_config.redis_port,
-        db=_config.redis_db,
+        host=config.redis_host,
+        port=config.redis_port,
+        db=config.redis_db,
         **connection_kwargs
     )
 
@@ -363,12 +359,11 @@ def memorycache(seconds: int) -> CacheRegionWrapper:
         A configured memory cache region wrapper.
     """
     if seconds not in _memory_cache_regions:
-        _config = get_config()
         region = make_region(
             function_key_generator=key_generator,
             key_mangler=key_mangler_default,
         ).configure(
-            _config.memory,
+            config.memory,
             expiration_time=seconds,
         )
         _memory_cache_regions[seconds] = _wrap_cache_on_arguments(region)
@@ -396,7 +391,6 @@ def filecache(seconds: int) -> CacheRegionWrapper:
         filename = f'cache{seconds // 3600}hour'
 
     if seconds not in _file_cache_regions:
-        _config = get_config()
         region = make_region(
             function_key_generator=key_generator,
             key_mangler=key_mangler_default,
@@ -404,7 +398,7 @@ def filecache(seconds: int) -> CacheRegionWrapper:
             'dogpile.cache.dbm',
             expiration_time=seconds,
             arguments={
-                'filename': os.path.join(_config.tmpdir, filename),
+                'filename': os.path.join(config.tmpdir, filename),
                 'lock_factory': CustomFileLock
             }
         )
@@ -425,25 +419,24 @@ def rediscache(seconds: int) -> CacheRegionWrapper:
         A configured Redis cache region wrapper.
     """
     if seconds not in _redis_cache_regions:
-        _config = get_config()
         name = _seconds_to_region_name(seconds)
 
         region = make_region(name=name, function_key_generator=key_generator,
                              key_mangler=partial(key_mangler_region, region=name))
 
         connection_kwargs = {}
-        if _config.redis_ssl:
+        if config.redis_ssl:
             connection_kwargs['ssl'] = True
 
         region.configure(
-            _config.redis,
+            config.redis,
             arguments={
-                'host': _config.redis_host,
-                'port': _config.redis_port,
-                'db': _config.redis_db,
+                'host': config.redis_host,
+                'port': config.redis_port,
+                'db': config.redis_db,
                 'redis_expiration_time': seconds,
-                'distributed_lock': _config.redis_distributed,
-                'thread_local_lock': not _config.redis_distributed,
+                'distributed_lock': config.redis_distributed,
+                'thread_local_lock': not config.redis_distributed,
                 'connection_kwargs': connection_kwargs,
             },
             region_invalidator=RedisInvalidator(region)
@@ -493,10 +486,9 @@ def clear_filecache(seconds: int | None = None, namespace: str | None = None) ->
         logger.warning(f'No file cache region exists for {seconds} seconds')
         return
 
-    _config = get_config()
     filename = _file_cache_regions[seconds].actual_backend.filename
     basename = pathlib.Path(filename).name
-    filepath = os.path.join(_config.tmpdir, basename)
+    filepath = os.path.join(config.tmpdir, basename)
 
     if namespace is None:
         db = dbm.open(filepath, 'n')
@@ -529,13 +521,12 @@ def clear_rediscache(seconds: int | None = None, namespace: str | None = None) -
     if seconds is None and namespace is None:
         raise ValueError('Must specify seconds, namespace, or both')
 
-    _config = get_config()
-    client = _get_redis_client()
+    client = get_redis_client()
     deleted_count = 0
 
     if seconds is not None:
         region_name = _seconds_to_region_name(seconds)
-        region_prefix = f'{region_name}:{_config.debug_key}'
+        region_prefix = f'{region_name}:{config.debug_key}'
 
         if namespace is None:
             # Clear all keys in region
@@ -556,7 +547,7 @@ def clear_rediscache(seconds: int | None = None, namespace: str | None = None) -
     else:
         # namespace only - clear across ALL regions
         matches_namespace = _create_namespace_filter(namespace)
-        for key in client.scan_iter(match=f'*:{_config.debug_key}*'):
+        for key in client.scan_iter(match=f'*:{config.debug_key}*'):
             key_str = key.decode()
             if ':' in key_str:
                 key_without_region = key_str.split(':', 1)[1]

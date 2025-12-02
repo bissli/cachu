@@ -18,13 +18,7 @@ class CacheConfig:
     tmpdir: str = '/tmp'
 
 
-_config = CacheConfig()
-
-
-def get_config() -> CacheConfig:
-    """Get the current global configuration.
-    """
-    return _config
+config = CacheConfig()
 
 
 def configure(**kwargs) -> None:
@@ -42,7 +36,7 @@ def configure(**kwargs) -> None:
         tmpdir: Directory for file-based caches (default: "/tmp")
     """
     for key, value in kwargs.items():
-        if hasattr(_config, key):
-            setattr(_config, key, value)
+        if hasattr(config, key):
+            setattr(config, key, value)
         else:
             raise ValueError(f'Unknown configuration key: {key}')

@@ -18,9 +18,9 @@ def test_configure_updates_settings():
     """Verify configure() updates global configuration.
     """
     cache.configure(debug_key='v2:', tmpdir='/var/cache')
-    config = cache.get_config()
-    assert config.debug_key == 'v2:'
-    assert config.tmpdir == '/var/cache'
+    cfg = cache.config
+    assert cfg.debug_key == 'v2:'
+    assert cfg.tmpdir == '/var/cache'
 
 
 def test_configure_rejects_invalid_keys():
@@ -40,9 +40,9 @@ def test_configure_redis_settings():
         redis_ssl=True,
         redis_distributed=True
     )
-    config = cache.get_config()
-    assert config.redis_host == 'redis.example.com'
-    assert config.redis_port == 6380
-    assert config.redis_db == 1
-    assert config.redis_ssl is True
-    assert config.redis_distributed is True
+    cfg = cache.config
+    assert cfg.redis_host == 'redis.example.com'
+    assert cfg.redis_port == 6380
+    assert cfg.redis_db == 1
+    assert cfg.redis_ssl is True
+    assert cfg.redis_distributed is True

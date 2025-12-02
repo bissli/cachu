@@ -184,7 +184,7 @@ def test_clear_redis_without_registration(redis_docker):
     cache.clear_rediscache(seconds=300, namespace='test')
 
     # Verify key is deleted
-    client = cache.cache._get_redis_client()
+    client = cache.get_redis_client()
     keys = list(client.scan_iter(match='5m:*'))
     assert len(keys) == 0
 
@@ -213,7 +213,7 @@ def test_clear_redis_namespace_across_all_regions(redis_docker):
     cache.clear_rediscache(namespace='users')
 
     # Verify 'users' keys are deleted, 'products' key remains
-    client = cache.cache._get_redis_client()
+    client = cache.get_redis_client()
     keys = [k.decode() for k in client.scan_iter(match='*:*')]
     assert not any('|users|' in k for k in keys)
     assert any('|products|' in k for k in keys)
