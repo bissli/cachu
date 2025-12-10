@@ -38,8 +38,7 @@ def test_configure_redis_settings():
         redis_port=6380,
         redis_db=1,
         redis_ssl=True,
-        redis_distributed=True
-    )
+        redis_distributed=True)
     cfg = cache.config
     assert cfg.redis_host == 'redis.example.com'
     assert cfg.redis_port == 6380

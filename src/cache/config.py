@@ -6,18 +6,13 @@ configuration conflicts when multiple libraries use the cache package.
 import inspect
 import logging
 from dataclasses import dataclass, replace
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
 
 def _get_caller_namespace() -> str | None:
     """Get the top-level package name of the caller.
-
-    Walks the call stack to find the first frame outside the cache package,
-    then extracts its top-level package name.
-
-    Returns
-        Top-level package name or None if not determinable.
     """
     for frame_info in inspect.stack():
         module = inspect.getmodule(frame_info.frame)
@@ -52,19 +47,12 @@ class ConfigRegistry:
     multiple libraries use the cache package with different settings.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._configs: dict[str | None, CacheConfig] = {}
         self._default = CacheConfig()
 
     def configure(self, namespace: str | None = None, **kwargs) -> CacheConfig:
         """Configure cache for a specific namespace.
-
-        Args:
-            namespace: Package namespace. Auto-detected from caller if not provided.
-            **kwargs: Configuration values to set.
-
-        Returns
-            The CacheConfig for the namespace.
         """
         if namespace is None:
             namespace = _get_caller_namespace()
@@ -90,12 +78,6 @@ class ConfigRegistry:
 
     def get_config(self, namespace: str | None = None) -> CacheConfig:
         """Get config for a namespace, with fallback to default.
-
-        Args:
-            namespace: Package namespace. Auto-detected from caller if not provided.
-
-        Returns
-            CacheConfig for the namespace, or default config if not found.
         """
         if namespace is None:
             namespace = _get_caller_namespace()
@@ -106,11 +88,13 @@ class ConfigRegistry:
         return self._default
 
     def get_all_namespaces(self) -> list[str | None]:
-        """Return list of configured namespaces."""
+        """Return list of configured namespaces.
+        """
         return list(self._configs.keys())
 
     def clear(self) -> None:
-        """Clear all namespace configurations. Primarily for testing."""
+        """Clear all namespace configurations. Primarily for testing.
+        """
         self._configs.clear()
 
 
@@ -126,11 +110,11 @@ class ConfigProxy:
         config.redis  # Automatically resolves to caller's namespace
     """
 
-    def __getattr__(self, name: str):
+    def __getattr__(self, name: str) -> Any:
         cfg = _registry.get_config()
         return getattr(cfg, name)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         namespace = _get_caller_namespace()
         cfg = _registry.get_config(namespace)
         return f'ConfigProxy(namespace={namespace!r}, config={cfg!r})'
@@ -166,10 +150,12 @@ def configure(**kwargs) -> CacheConfig:
 
 
 def get_config(namespace: str | None = None) -> CacheConfig:
-    """Get the CacheConfig for a specific namespace or the caller's namespace."""
+    """Get the CacheConfig for a specific namespace or the caller's namespace.
+    """
     return _registry.get_config(namespace)
 
 
 def clear_registry() -> None:
-    """Clear all namespace configurations. Primarily for testing."""
+    """Clear all namespace configurations. Primarily for testing.
+    """
     _registry.clear()

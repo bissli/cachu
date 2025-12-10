@@ -17,11 +17,8 @@ from .config import _get_caller_namespace, config, get_config
 logger = logging.getLogger(__name__)
 
 
-def _is_connection_like(obj) -> bool:
+def _is_connection_like(obj: Any) -> bool:
     """Check if object appears to be a database connection.
-
-    Uses heuristics to detect common database connection objects without
-    requiring database library imports.
     """
     if hasattr(obj, 'driver_connection'):
         return True
@@ -40,12 +37,6 @@ def _is_connection_like(obj) -> bool:
 
 def _normalize_namespace(namespace: str) -> str:
     """Normalize namespace to always be wrapped in pipes.
-
-    Parameters
-        namespace: The namespace string to normalize.
-
-    Returns
-        The namespace wrapped in pipes on both sides (e.g., |foo|).
     """
     if not namespace:
         return ''
@@ -56,12 +47,6 @@ def _normalize_namespace(namespace: str) -> str:
 
 def _create_namespace_filter(namespace: str) -> Callable[[str], bool]:
     """Create a filter function for namespace-based key matching.
-
-    Parameters
-        namespace: The namespace to filter by.
-
-    Returns
-        A function that returns True if a key matches the namespace.
     """
     debug_prefix = config.debug_key
     normalized_ns = _normalize_namespace(namespace)
@@ -78,17 +63,6 @@ def _create_namespace_filter(namespace: str) -> Callable[[str], bool]:
 
 def key_generator(namespace: str, fn: Callable[..., Any], exclude_params: set[str] | None = None) -> Callable[..., str]:
     """Generate a cache key for the given namespace and function.
-
-    This function uses the provided function's argument specification to generate
-    a unique cache key based on the arguments passed to the function.
-
-    Parameters
-        namespace: A string to be prefixed to the key. Can be empty.
-        fn: The function for which the key is being generated.
-        exclude_params: Optional set of parameter names to exclude from cache key.
-
-    Returns
-        A callable that generates a cache key string from the function's arguments.
     """
     exclude_params = exclude_params or set()
     namespace = f'{fn.__name__}|{_normalize_namespace(namespace)}' if namespace else f'{fn.__name__}'
@@ -114,34 +88,18 @@ def key_generator(namespace: str, fn: Callable[..., Any], exclude_params: set[st
 
 def key_mangler_default(key: str) -> str:
     """Modify the key for debugging purposes by prefixing it with a debug marker.
-
-    Parameters
-        key: The original cache key.
-
-    Returns
-        A modified cache key with the debug marker prepended.
     """
     return f'{config.debug_key}{key}'
 
 
 def key_mangler_region(key: str, region: str) -> str:
     """Modify the key for a specific region for debugging purposes.
-
-    Parameters
-        key: The original cache key.
-        region: The cache region name.
-
-    Returns
-        A modified cache key that includes the region prefix and debug marker.
     """
     return f'{region}:{config.debug_key}{key}'
 
 
 def _make_key_mangler(debug_key: str) -> Callable[[str], str]:
     """Create a key mangler with a captured debug_key.
-
-    This ensures the debug_key is bound at region creation time,
-    not resolved dynamically at key mangling time.
     """
     def mangler(key: str) -> str:
         return f'{debug_key}{key}'
@@ -149,7 +107,8 @@ def _make_key_mangler(debug_key: str) -> Callable[[str], str]:
 
 
 def _make_region_key_mangler(debug_key: str, region_name: str) -> Callable[[str], str]:
-    """Create a region key mangler with captured debug_key and region name."""
+    """Create a region key mangler with captured debug_key and region name.
+    """
     def mangler(key: str) -> str:
         return f'{region_name}:{debug_key}{key}'
     return mangler
@@ -157,24 +116,12 @@ def _make_region_key_mangler(debug_key: str, region_name: str) -> Callable[[str]
 
 def should_cache_fn(value: Any) -> bool:
     """Determine if the given value should be cached.
-
-    Parameters
-        value: The value to evaluate for caching.
-
-    Returns
-        True if the value should be cached, False otherwise.
     """
     return bool(value)
 
 
 def _seconds_to_region_name(seconds: int) -> str:
     """Convert seconds to a human-readable region name.
-
-    Parameters
-        seconds: The expiration time in seconds.
-
-    Returns
-        A short region name (e.g., '30s', '5m', '12h', '2d').
     """
     if seconds < 60:
         return f'{seconds}s'
@@ -186,14 +133,8 @@ def _seconds_to_region_name(seconds: int) -> str:
         return f'{seconds // 86400}d'
 
 
-def get_redis_client(namespace: str | None = None):
+def get_redis_client(namespace: str | None = None) -> Any:
     """Create a Redis client directly from config.
-
-    Parameters
-        namespace: Package namespace. Auto-detected from caller if not provided.
-
-    Returns
-        A redis.Redis client instance.
     """
     import redis
     if namespace is None:
@@ -211,8 +152,9 @@ def get_redis_client(namespace: str | None = None):
 
 
 class CacheRegionWrapper:
-    """Wrapper for CacheRegion that adds exclude_params support to cache_on_arguments.
+    """Wrapper for CacheRegion that adds exclude_params support.
     """
+
     def __init__(self, region: CacheRegion) -> None:
         self._region = region
         self._original_cache_on_arguments = region.cache_on_arguments
@@ -222,8 +164,7 @@ class CacheRegionWrapper:
         namespace: str = '',
         should_cache_fn: Callable[[Any], bool] = should_cache_fn,
         exclude_params: set[str] | None = None,
-        **kwargs
-    ) -> Callable:
+        **kwargs) -> Callable:
         """Cache function results based on arguments with optional parameter exclusion.
         """
         if exclude_params:
@@ -254,63 +195,40 @@ def _wrap_cache_on_arguments(region: CacheRegion) -> CacheRegionWrapper:
 
 class CustomFileLock(AbstractFileLock):
     """Implementation of a file lock using a read-write mutex.
-
-    Note:
-        This implementation may be replaced with portalocker in the future.
     """
+
     def __init__(self, filename: str) -> None:
         self.mutex = ReadWriteMutex()
 
     def acquire_read_lock(self, wait: bool) -> bool:
         """Acquire the read lock.
-
-        Parameters
-            wait: Flag indicating whether to wait for the lock.
-
-        Returns
-            True if the lock is acquired, False otherwise.
         """
         ret = self.mutex.acquire_read_lock(wait)
         return wait or ret
 
     def acquire_write_lock(self, wait: bool) -> bool:
         """Acquire the write lock.
-
-        Parameters
-            wait: Flag indicating whether to wait for the lock.
-
-        Returns
-            True if the lock is acquired, False otherwise.
         """
         ret = self.mutex.acquire_write_lock(wait)
         return wait or ret
 
     def release_read_lock(self) -> bool:
         """Release the read lock.
-
-        Returns
-            True if the lock is released successfully.
         """
         return self.mutex.release_read_lock()
 
     def release_write_lock(self) -> bool:
         """Release the write lock.
-
-        Returns
-            True if the lock is released successfully.
         """
         return self.mutex.release_write_lock()
 
 
 class RedisInvalidator(DefaultInvalidationStrategy):
+    """Redis invalidation strategy with optional key deletion.
+    """
 
     def __init__(self, region: CacheRegion, delete_keys: bool = False) -> None:
         """Initialize the RedisInvalidator for a given CacheRegion.
-
-        Parameters
-            region: A dogpile.cache.CacheRegion instance that will be invalidated.
-            delete_keys: If True, physically delete keys from Redis on invalidation.
-                        If False, rely on timestamp-based invalidation only.
         """
         self.region = region
         self.delete_keys = delete_keys
@@ -318,9 +236,6 @@ class RedisInvalidator(DefaultInvalidationStrategy):
 
     def invalidate(self, hard: bool = True) -> None:
         """Invalidate the cache region using timestamp-based invalidation.
-
-        Parameters
-            hard: If True, perform a hard invalidation.
         """
         super().invalidate(hard)
         if self.delete_keys:
@@ -340,16 +255,6 @@ class RedisInvalidator(DefaultInvalidationStrategy):
 
 def _handle_all_regions(regions_dict: dict[tuple[str | None, int], CacheRegionWrapper], log_level: str = 'warning') -> Callable:
     """Decorator to handle clearing all cache regions when seconds=None.
-
-    When seconds=None, iterates through all regions for the caller's namespace
-    and calls the decorated function for each one.
-
-    Parameters
-        regions_dict: Dictionary of cache regions keyed by (namespace, seconds)
-        log_level: Logging level to use when no regions exist (default 'warning')
-
-    Returns
-        Decorator function that wraps cache clearing functions
     """
     def decorator(func: Callable) -> Callable:
         @wraps(func)
@@ -379,14 +284,6 @@ _memory_cache_regions: dict[tuple[str | None, int], CacheRegionWrapper] = {}
 
 def memorycache(seconds: int) -> CacheRegionWrapper:
     """Create or retrieve a memory cache region with a specified expiration time.
-
-    Each calling namespace (package) gets its own isolated region.
-
-    Parameters
-        seconds: The expiration time in seconds for caching.
-
-    Returns
-        A configured memory cache region wrapper.
     """
     namespace = _get_caller_namespace()
     cfg = get_config(namespace)
@@ -410,14 +307,6 @@ _file_cache_regions: dict[tuple[str | None, int], CacheRegionWrapper] = {}
 
 def filecache(seconds: int) -> CacheRegionWrapper:
     """Create or retrieve a file cache region with a specified expiration time.
-
-    Each calling namespace (package) gets its own isolated region.
-
-    Parameters
-        seconds: The expiration time in seconds for caching.
-
-    Returns
-        A configured file cache region wrapper.
     """
     namespace = _get_caller_namespace()
     cfg = get_config(namespace)
@@ -470,17 +359,6 @@ _redis_cache_regions: dict[tuple[str | None, int], CacheRegionWrapper] = {}
 
 def rediscache(seconds: int) -> CacheRegionWrapper:
     """Create or retrieve a Redis cache region with a specified expiration time.
-
-    Each calling namespace (package) gets its own isolated region.
-
-    If the namespace's config has redis='dogpile.cache.null', creates a null
-    region (no-op caching) to respect the explicit configuration.
-
-    Parameters
-        seconds: The expiration time in seconds for caching.
-
-    Returns
-        A configured Redis cache region wrapper.
     """
     namespace = _get_caller_namespace()
     cfg = get_config(namespace)
@@ -531,12 +409,6 @@ def rediscache(seconds: int) -> CacheRegionWrapper:
 @_handle_all_regions(_memory_cache_regions)
 def clear_memorycache(seconds: int | None = None, namespace: str | None = None) -> None:
     """Clear a memory cache region.
-
-    When decorated, supports seconds=None to clear all regions for the caller's namespace.
-
-    Parameters
-        seconds: Expiration time in seconds that identifies the region to clear
-        namespace: Optional namespace to filter which keys to clear
     """
     caller_ns = _get_caller_namespace()
     cfg = get_config(caller_ns)
@@ -562,12 +434,6 @@ def clear_memorycache(seconds: int | None = None, namespace: str | None = None) 
 @_handle_all_regions(_file_cache_regions)
 def clear_filecache(seconds: int | None = None, namespace: str | None = None) -> None:
     """Clear a file cache region.
-
-    When decorated, supports seconds=None to clear all regions for the caller's namespace.
-
-    Parameters
-        seconds: Expiration time in seconds that identifies the region to clear
-        namespace: Optional namespace to filter which keys to clear
     """
     caller_ns = _get_caller_namespace()
     cfg = get_config(caller_ns)
@@ -599,15 +465,6 @@ def clear_filecache(seconds: int | None = None, namespace: str | None = None) ->
 
 def clear_rediscache(seconds: int | None = None, namespace: str | None = None) -> None:
     """Clear a redis cache region.
-
-    Parameters
-        seconds: Expiration time in seconds that identifies the region to clear.
-                 If None, namespace must be provided to clear across all regions.
-        namespace: Optional namespace to filter which keys to clear.
-                   If None, clears all keys in the specified region.
-
-    Raises
-        ValueError: If both seconds and namespace are None.
     """
     if seconds is None and namespace is None:
         raise ValueError('Must specify seconds, namespace, or both')
@@ -713,16 +570,6 @@ _BACKEND_MAP = {
 
 def defaultcache(seconds: int) -> CacheRegionWrapper:
     """Return cache region based on configured default backend.
-
-    The backend is determined by config.default_backend which can be 'memory',
-    'redis', or 'file'. This allows applications to switch cache backends
-    via configuration (e.g., memory in dev, redis in prod).
-
-    Parameters
-        seconds: The expiration time in seconds for caching.
-
-    Returns
-        A configured cache region wrapper.
     """
     backend = config.default_backend
     if backend not in _BACKEND_MAP:
@@ -732,11 +579,6 @@ def defaultcache(seconds: int) -> CacheRegionWrapper:
 
 def clear_defaultcache(seconds: int | None = None, namespace: str | None = None) -> None:
     """Clear the default cache region.
-
-    Parameters
-        seconds: Expiration time in seconds that identifies the region to clear.
-                 If None, clears all regions (or requires namespace for redis).
-        namespace: Optional namespace to filter which keys to clear.
     """
     return _BACKEND_MAP[config.default_backend][1](seconds, namespace)
 
@@ -754,7 +596,8 @@ def delete_defaultcache_key(seconds: int, namespace: str, fn: Callable[..., Any]
 
 
 def clear_all_regions() -> None:
-    """Clear all cache regions across all namespaces. Primarily for testing."""
+    """Clear all cache regions across all namespaces. Primarily for testing.
+    """
     _memory_cache_regions.clear()
     _file_cache_regions.clear()
     _redis_cache_regions.clear()

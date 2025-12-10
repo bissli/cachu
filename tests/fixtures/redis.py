@@ -6,7 +6,8 @@ logger = logging.getLogger(__name__)
 
 
 class RedisTestConfig:
-    """Singleton to store Redis test configuration."""
+    """Singleton to store Redis test configuration.
+    """
     host = 'localhost'
     port = 6379
 

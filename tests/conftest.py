@@ -67,8 +67,7 @@ def reset_cache_config(request):
         redis_db=0,
         redis_ssl=False,
         redis_distributed=False,
-        default_backend='memory',
-    )
+        default_backend='memory')
 
     if is_redis_test:
         try:
@@ -95,7 +94,8 @@ def temp_cache_dir():
 
 
 def get_memory_region(seconds: int):
-    """Get memory cache region by seconds (finds first matching region)."""
+    """Get memory cache region by seconds (finds first matching region).
+    """
     for (ns, secs), region in cache.cache._memory_cache_regions.items():
         if secs == seconds:
             return region
@@ -103,7 +103,8 @@ def get_memory_region(seconds: int):
 
 
 def get_file_region(seconds: int):
-    """Get file cache region by seconds (finds first matching region)."""
+    """Get file cache region by seconds (finds first matching region).
+    """
     for (ns, secs), region in cache.cache._file_cache_regions.items():
         if secs == seconds:
             return region
@@ -111,7 +112,8 @@ def get_file_region(seconds: int):
 
 
 def get_redis_region(seconds: int):
-    """Get redis cache region by seconds (finds first matching region)."""
+    """Get redis cache region by seconds (finds first matching region).
+    """
     for (ns, secs), region in cache.cache._redis_cache_regions.items():
         if secs == seconds:
             return region
@@ -119,17 +121,20 @@ def get_redis_region(seconds: int):
 
 
 def has_memory_region(seconds: int) -> bool:
-    """Check if a memory cache region exists for given seconds."""
+    """Check if a memory cache region exists for given seconds.
+    """
     return any(secs == seconds for (ns, secs) in cache.cache._memory_cache_regions)
 
 
 def has_file_region(seconds: int) -> bool:
-    """Check if a file cache region exists for given seconds."""
+    """Check if a file cache region exists for given seconds.
+    """
     return any(secs == seconds for (ns, secs) in cache.cache._file_cache_regions)
 
 
 def has_redis_region(seconds: int) -> bool:
-    """Check if a redis cache region exists for given seconds."""
+    """Check if a redis cache region exists for given seconds.
+    """
     return any(secs == seconds for (ns, secs) in cache.cache._redis_cache_regions)
 
 
@@ -144,4 +149,4 @@ def sample_function():
 
 pytest_plugins = [
     'fixtures.redis',
-]
+    ]
