@@ -3,7 +3,6 @@
 Each calling library gets its own isolated configuration, preventing
 configuration conflicts when multiple libraries use the cache package.
 """
-import inspect
 import logging
 import os
 import pathlib
@@ -39,15 +38,15 @@ def is_disabled() -> bool:
 def _get_caller_package() -> str | None:
     """Get the top-level package name of the caller.
     """
-    for frame_info in inspect.stack():
-        module = inspect.getmodule(frame_info.frame)
-        if module and module.__name__:
-            if module.__name__.startswith('cache'):
-                continue
-            ns = module.__name__.split('.')[0]
+    frame = sys._getframe(1)
+    while frame:
+        name = frame.f_globals.get('__name__', '')
+        if name and not name.startswith('cache'):
+            ns = name.split('.')[0]
             if ns == '__main__' and sys.argv and sys.argv[0]:
                 return f'__main__.{pathlib.Path(sys.argv[0]).stem}'
             return ns
+        frame = frame.f_back
     return None
 
 
