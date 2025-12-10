@@ -25,7 +25,7 @@ def test_redis_cache_basic_decoration(redis_docker):
     assert call_count == 1
 
 
-@pytest.mark.parametrize('seconds,expected_name', [
+@pytest.mark.parametrize(('seconds', 'expected_name'), [
     (30, '30s'),
     (120, '2m'),
     (7200, '2h'),
@@ -40,7 +40,8 @@ def test_redis_cache_naming_convention(redis_docker, seconds, expected_name):
 
     func(1)
 
-    region = cache.cache._redis_cache_regions[seconds]
+    from conftest import get_redis_region
+    region = get_redis_region(seconds)
     assert region.name == expected_name
 
 
@@ -66,6 +67,7 @@ def test_redis_cache_distributed_lock_configuration(redis_docker):
 
     func(5)
 
-    region = cache.cache._redis_cache_regions[300]
+    from conftest import get_redis_region
+    region = get_redis_region(300)
     assert hasattr(region.backend, 'distributed_lock')
     assert region.backend.distributed_lock is True

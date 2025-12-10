@@ -83,8 +83,9 @@ def test_memory_cache_multiple_regions():
     func1(5)
     func2(5)
 
-    assert 60 in cache.cache._memory_cache_regions
-    assert 300 in cache.cache._memory_cache_regions
+    from conftest import has_memory_region
+    assert has_memory_region(60)
+    assert has_memory_region(300)
 
 
 def test_memory_cache_with_kwargs():

@@ -121,14 +121,16 @@ def test_delete_defaultcache_key():
 def test_defaultcache_backend_switching():
     """Verify defaultcache correctly switches between backends.
     """
+    from conftest import has_file_region, has_memory_region
+
     cache.configure(default_backend='memory')
     assert cache.config.default_backend == 'memory'
 
     memory_region = cache.defaultcache(seconds=60)
-    assert 60 in cache.cache._memory_cache_regions
+    assert has_memory_region(60)
 
     cache.configure(default_backend='file', tmpdir='/tmp')
     assert cache.config.default_backend == 'file'
 
     file_region = cache.defaultcache(seconds=120)
-    assert 120 in cache.cache._file_cache_regions
+    assert has_file_region(120)

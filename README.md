@@ -91,6 +91,49 @@ Available configuration options:
 - `redis_ssl`: Use SSL for Redis connection (default: False)
 - `redis_distributed`: Use distributed locks for Redis (default: False)
 - `tmpdir`: Directory for file-based caches (default: "/tmp")
+- `default_backend`: Backend for `defaultcache()` - "memory", "redis", or "file" (default: "memory")
+
+### Namespace Isolation
+
+Each calling package automatically gets its own isolated configuration. This prevents configuration conflicts when multiple libraries use the cache package with different settings:
+
+```python
+# In library_a/config.py
+import cache
+cache.configure(debug_key="lib_a:", redis_host="redis-a.example.com")
+
+# In library_b/config.py
+import cache
+cache.configure(debug_key="lib_b:", redis_host="redis-b.example.com")
+
+# Each library uses its own configuration automatically
+```
+
+New configurations inherit settings from the default, so you only need to specify what's different:
+
+```python
+# Set defaults for all packages
+from cache.config import _registry, CacheConfig
+_registry._default = CacheConfig(
+    memory="dogpile.cache.memory_pickle",
+    tmpdir="/var/cache/app"
+)
+
+# Package-specific overrides only need to specify changes
+cache.configure(debug_key="mypackage:")
+```
+
+You can also retrieve configuration for a specific namespace:
+
+```python
+import cache
+
+# Get config for the caller's namespace
+cfg = cache.get_config()
+
+# Get config for a specific namespace
+cfg = cache.get_config(namespace="mypackage")
+```
 
 ## Usage
 
@@ -126,6 +169,60 @@ def fetch_external_data(api_key):
     # ... call external API
     return response
 ```
+
+### Default Cache
+
+Use `defaultcache` when you want to switch cache backends via configuration without changing code. This is useful for using memory cache in development and Redis in production:
+
+```python
+from cache import defaultcache
+
+@defaultcache(seconds=300).cache_on_arguments()
+def get_data(key):
+    # ... fetch data
+    return result
+```
+
+Configure which backend to use:
+
+```python
+import cache
+
+# Development: use memory cache
+cache.configure(
+    default_backend="memory",
+    memory="dogpile.cache.memory_pickle"
+)
+
+# Production: use Redis
+cache.configure(
+    default_backend="redis",
+    redis="dogpile.cache.redis",
+    redis_host="redis.example.com"
+)
+```
+
+The `default_backend` option accepts "memory", "redis", or "file". All related operations work with the configured backend:
+
+```python
+from cache import (
+    defaultcache,
+    clear_defaultcache,
+    set_defaultcache_key,
+    delete_defaultcache_key
+)
+
+@defaultcache(seconds=300).cache_on_arguments(namespace="users")
+def get_user(user_id):
+    return fetch_user(user_id)
+
+# These use whatever backend is configured
+clear_defaultcache(seconds=300, namespace="users")
+set_defaultcache_key(300, "users", get_user, {"id": 123}, user_id=123)
+delete_defaultcache_key(300, "users", get_user, user_id=123)
+```
+
+**Safety feature**: If `rediscache()` is called but Redis is not configured (backend is null), it automatically falls back to `memorycache()` with a warning logged. This prevents silent failures in misconfigured environments.
 
 ### Namespaces
 
@@ -333,5 +430,8 @@ result = get_user_data(connection2, 123)  # Cache hit
 - **Multiple backends**: Memory, file (DBM), and Redis support
 - **Flexible expiration**: Configure different TTLs for different use cases
 - **Namespace support**: Organize and selectively clear cache regions
+- **Namespace isolation**: Each calling package gets isolated configuration automatically
+- **Configurable default backend**: Switch between memory/file/Redis via configuration with `defaultcache`
 - **Intelligent filtering**: Automatically excludes `self`, `cls`, database connections, and underscore-prefixed parameters
 - **Custom key generation**: Smart key generation based on function signatures
+- **Safe fallbacks**: Redis cache falls back to memory cache when Redis is not configured

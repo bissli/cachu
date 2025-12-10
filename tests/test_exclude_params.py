@@ -297,7 +297,8 @@ def test_exclude_params_clearing_namespace():
     get_data(1, 'key1')
     get_data(2, 'key1')
 
-    cache_dict = cache.cache._memory_cache_regions[300].actual_backend._cache
+    from conftest import get_memory_region
+    cache_dict = get_memory_region(300).actual_backend._cache
     assert len(cache_dict) == 1
 
     cache.clear_memorycache(seconds=300, namespace='data')

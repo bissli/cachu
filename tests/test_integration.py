@@ -166,5 +166,7 @@ def test_mixed_backends():
 
     assert result1 == 10
     assert result2 == 15
-    assert 60 in cache.cache._memory_cache_regions
-    assert 300 in cache.cache._file_cache_regions
+
+    from conftest import has_file_region, has_memory_region
+    assert has_memory_region(60)
+    assert has_file_region(300)

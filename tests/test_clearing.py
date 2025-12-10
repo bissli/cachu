@@ -16,7 +16,8 @@ def test_clear_memory_cache_all_keys():
 
     cache.clear_memorycache(seconds=300)
 
-    cache_dict = cache.cache._memory_cache_regions[300].actual_backend._cache
+    from conftest import get_memory_region
+    cache_dict = get_memory_region(300).actual_backend._cache
     assert len(cache_dict) == 0
 
 
@@ -36,7 +37,8 @@ def test_clear_memory_cache_by_namespace():
 
     cache.clear_memorycache(seconds=300, namespace='users')
 
-    cache_dict = cache.cache._memory_cache_regions[300].actual_backend._cache
+    from conftest import get_memory_region
+    cache_dict = get_memory_region(300).actual_backend._cache
     assert len(cache_dict) == 1
 
 

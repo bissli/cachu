@@ -35,7 +35,8 @@ def test_file_cache_creates_dbm_file(temp_cache_dir):
 
     func(5)
 
-    cache_files = [f for f in os.listdir(temp_cache_dir) if f.startswith('cache')]
+    # With namespace isolation, files are prefixed with namespace (e.g., test_file_cache_cache5min)
+    cache_files = [f for f in os.listdir(temp_cache_dir) if 'cache' in f]
     assert len(cache_files) > 0
 
 
@@ -53,7 +54,8 @@ def test_file_cache_naming_convention(seconds, expected_name):
 
     func(1)
 
-    region = cache.cache._file_cache_regions[seconds]
+    from conftest import get_file_region
+    region = get_file_region(seconds)
     assert expected_name in region.actual_backend.filename
 
 
@@ -66,7 +68,8 @@ def test_file_cache_persists_across_region_recreation(temp_cache_dir):
 
     func(5)
 
-    region = cache.cache._file_cache_regions[300]
+    from conftest import get_file_region
+    region = get_file_region(300)
     cache_file = region.actual_backend.filename
 
     assert pathlib.Path(cache_file).exists() or any(
@@ -74,7 +77,10 @@ def test_file_cache_persists_across_region_recreation(temp_cache_dir):
         for ext in ['.db', '.dat', '.bak', '.dir']
     )
 
-    del cache.cache._file_cache_regions[300]
+    # Remove the region entry (need to find the key with seconds=300)
+    key_to_del = next((k for k in cache.cache._file_cache_regions if k[1] == 300), None)
+    if key_to_del:
+        del cache.cache._file_cache_regions[key_to_del]
 
     assert pathlib.Path(cache_file).exists() or any(
         pathlib.Path(f'{cache_file}{ext}').exists()
