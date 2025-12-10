@@ -109,6 +109,8 @@ cache.configure(debug_key="lib_b:", redis_host="redis-b.example.com")
 # Each library uses its own configuration automatically
 ```
 
+**Script execution**: When code runs as `__main__` (directly executed scripts), the namespace is automatically normalized to `__main__.scriptname` for stability. This prevents namespace fragmentation when the same code is run directly vs imported as a module.
+
 New configurations inherit settings from the default, so you only need to specify what's different:
 
 ```python
@@ -222,8 +224,6 @@ set_defaultcache_key(300, "users", get_user, {"id": 123}, user_id=123)
 delete_defaultcache_key(300, "users", get_user, user_id=123)
 ```
 
-**Safety feature**: If `rediscache()` is called but Redis is not configured (backend is null), it automatically falls back to `memorycache()` with a warning logged. This prevents silent failures in misconfigured environments.
-
 ### Namespaces
 
 Namespaces organize cache keys into logical groups that can be selectively cleared:
@@ -275,6 +275,32 @@ clear_memorycache(namespace="users")
 | `300`     | `"users"`   | Clears only "users" namespace keys in the 300-second region |
 | `None`    | `None`      | Clears all keys in all regions                              |
 | `None`    | `"users"`   | Clears "users" namespace keys across all regions            |
+
+### Cross-Module Cache Clearing
+
+When clearing caches from a different module than where the cache decorators were applied, use the `caller_namespace` parameter or the `clear_cache_for_namespace()` helper:
+
+```python
+from cache import clear_memorycache, clear_cache_for_namespace
+
+# In myapp/service.py - cache is created with namespace "myapp"
+@memorycache(seconds=300).cache_on_arguments()
+def get_data(id):
+    return fetch_data(id)
+
+# In tests/conftest.py - clearing from different module
+# Without caller_namespace, this would look for "tests" namespace and fail silently
+clear_memorycache(seconds=300, caller_namespace="myapp")
+
+# Or use the helper function for convenience
+clear_cache_for_namespace("myapp", backend="memory", seconds=300)
+clear_cache_for_namespace("myapp")  # Clears all backends for namespace
+```
+
+The `clear_cache_for_namespace()` helper accepts:
+- `namespace`: The namespace to clear (required)
+- `backend`: "memory", "file", "redis", or None for all backends
+- `seconds`: Specific TTL to clear, or None for all TTLs
 
 ### Setting Specific Keys
 
@@ -425,12 +451,30 @@ result = get_user_data(connection1, 123)  # Cached
 result = get_user_data(connection2, 123)  # Cache hit
 ```
 
+## Testing Utilities
+
+For testing, use `clear_all_regions()` to reset all caches:
+
+```python
+from cache import clear_all_regions
+
+def teardown_function():
+    clear_all_regions()  # Clears all cached data and region registries
+```
+
+This function clears:
+- All memory cache data
+- All file cache data (truncates DBM files)
+- All Redis cache keys
+- All internal region registries
+
 ## Features
 
 - **Multiple backends**: Memory, file (DBM), and Redis support
 - **Flexible expiration**: Configure different TTLs for different use cases
 - **Namespace support**: Organize and selectively clear cache regions
 - **Namespace isolation**: Each calling package gets isolated configuration automatically
+- **Cross-module clearing**: Clear caches from any module using explicit namespace parameters
 - **Configurable default backend**: Switch between memory/file/Redis via configuration with `defaultcache`
 - **Intelligent filtering**: Automatically excludes `self`, `cls`, database connections, and underscore-prefixed parameters
 - **Custom key generation**: Smart key generation based on function signatures

@@ -221,8 +221,10 @@ def test_clear_redis_namespace_across_all_regions(redis_docker):
     assert any('|products|' in k for k in keys)
 
 
-def test_clear_redis_no_args_raises_error():
-    """Verify calling clear_rediscache() with no args raises ValueError.
+def test_clear_redis_no_args_clears_all_regions():
+    """Verify calling clear_rediscache() with no args clears all regions for namespace.
+
+    This is consistent with clear_memorycache() and clear_filecache() behavior.
     """
-    with pytest.raises(ValueError):
-        cache.clear_rediscache()
+    # Should not raise - clears all regions for caller's namespace
+    cache.clear_rediscache()

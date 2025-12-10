@@ -6,9 +6,10 @@ configuration conflicts when multiple libraries use the cache package.
 import inspect
 import logging
 import os
+import pathlib
+import sys
 from dataclasses import dataclass, replace
 from typing import Any
-import pathlib
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +22,10 @@ def _get_caller_namespace() -> str | None:
         if module and module.__name__:
             if module.__name__.startswith('cache'):
                 continue
-            return module.__name__.split('.')[0]
+            ns = module.__name__.split('.')[0]
+            if ns == '__main__' and sys.argv and sys.argv[0]:
+                return f'__main__.{pathlib.Path(sys.argv[0]).stem}'
+            return ns
     return None
 
 
