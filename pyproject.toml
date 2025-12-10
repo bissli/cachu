@@ -1,26 +1,29 @@
-[tool.poetry]
+[project]
 name = "cache"
 version = "0.1.0"
-readme = "README.md"
 description = "Flexible caching library built on dogpile.cache"
-repository = "https://github.com/bissli/cache.git"
-authors = ["bissli"]
+readme = "README.md"
 license = "0BSD"
-packages = [{ include = "cache", from = 'src' }]
+authors = [{ name = "bissli" }]
+requires-python = ">=3.10"
+dependencies = [
+    "dogpile.cache",
+    "func-timeout",
+]
 
-[tool.poetry.dependencies]
-python = "^3.10"
-"dogpile.cache" = "*"
-func-timeout = "*"
-redis = { version = "*", optional = true }
-
-[tool.poetry.extras]
+[project.optional-dependencies]
 redis = ["redis"]
+test = [
+    "pytest",
+    "pytest-mock",
+    "testcontainers[redis]",
+]
 
-[tool.poetry.group.dev.dependencies]
-pytest = "*"
-pytest-mock = "*"
-docker = "*"
+[project.urls]
+Repository = "https://github.com/bissli/cache.git"
+
+[tool.setuptools.packages.find]
+where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -28,10 +31,10 @@ python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 markers = [
-    "redis: marks tests requiring Redis (deselect with '-m \"not redis\"')",
-    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+  "redis: marks tests requiring Redis (deselect with '-m \"not redis\"')",
+  "slow: marks tests as slow (deselect with '-m \"not slow\"')",
 ]
 
 [build-system]
-requires = ["poetry-core>=1.0.0"]
-build-backend = "poetry.core.masonry.api"
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"

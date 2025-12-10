@@ -1,66 +1,44 @@
 import logging
-import time
 
-import docker
 import pytest
 
 logger = logging.getLogger(__name__)
 
 
+class RedisTestConfig:
+    """Singleton to store Redis test configuration."""
+    host = 'localhost'
+    port = 6379
+
+
+redis_test_config = RedisTestConfig()
+
+
 @pytest.fixture(scope='session')
-def redis_docker(request):
-    """Start Redis container for testing.
+def redis_docker():
+    """Start Redis container for testing using testcontainers.
     """
-    client = docker.from_env()
+    from testcontainers.redis import RedisContainer
 
     try:
-        old_container = client.containers.get('test_redis')
-        logger.info('Found existing test container, removing it')
-        old_container.stop()
-        old_container.remove()
-    except docker.errors.NotFound:
-        pass
-    except Exception as e:
-        logger.warning(f'Error when cleaning up container: {e}')
+        import redis as redis_lib
+    except ImportError:
+        raise Exception('redis package not installed, cannot test Redis functionality')
 
-    try:
-        container = client.containers.run(
-            image='redis:7-alpine',
-            auto_remove=True,
-            name='test_redis',
-            ports={'6379/tcp': ('127.0.0.1', 6379)},
-            detach=True,
-            remove=True,
-        )
+    with RedisContainer('redis:7-alpine') as redis_container:
+        host = redis_container.get_container_host_ip()
+        port = int(redis_container.get_exposed_port(6379))
 
-        def finalizer():
-            try:
-                container.stop()
-            except Exception as e:
-                logger.warning(f'Error stopping container during cleanup: {e}')
+        # Update the singleton
+        redis_test_config.host = host
+        redis_test_config.port = port
 
-        request.addfinalizer(finalizer)
+        import cache
+        cache.configure(redis_host=host, redis_port=port)
 
-        try:
-            import redis
-        except ImportError:
-            raise Exception('redis package not installed, cannot test Redis functionality')
+        r = redis_lib.Redis(host=host, port=port, db=0)
+        r.ping()
+        r.close()
+        logger.debug(f'Redis container ready at {host}:{port}')
 
-        for i in range(30):
-            try:
-                r = redis.Redis(host='localhost', port=6379, db=0)
-                r.ping()
-                r.close()
-                logger.debug('Redis container ready')
-                break
-            except Exception as e:
-                logger.debug(e)
-                time.sleep(1)
-        else:
-            raise Exception('Redis container failed to start in time')
-
-        return container
-
-    except Exception as e:
-        logger.error(f'Error setting up Redis container: {e}')
-        raise
+        yield redis_container

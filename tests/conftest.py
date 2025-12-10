@@ -42,13 +42,23 @@ def reset_cache_config(request):
             params.get('fixture_needed') == 'redis_docker'
         )
 
+    # For redis tests, ensure the fixture runs first to get dynamic port
+    redis_host = 'localhost'
+    redis_port = 6379
+    if is_redis_test:
+        request.getfixturevalue('redis_docker')
+        # Import the config from the fixture module
+        from fixtures.redis import redis_test_config
+        redis_host = redis_test_config.host
+        redis_port = redis_test_config.port
+
     cache.configure(
         debug_key='test:',
         memory='dogpile.cache.memory_pickle',
         redis='dogpile.cache.redis' if is_redis_test else 'dogpile.cache.null',
         tmpdir=tempfile.gettempdir(),
-        redis_host='localhost',
-        redis_port=6379,
+        redis_host=redis_host,
+        redis_port=redis_port,
         redis_db=0,
         redis_ssl=False,
         redis_distributed=False,
@@ -57,7 +67,7 @@ def reset_cache_config(request):
 
     if is_redis_test:
         try:
-            r = redis.Redis(host='localhost', port=6379, db=0)
+            r = redis.Redis(host=redis_host, port=redis_port, db=0)
             r.flushdb()
             r.close()
         except Exception:
