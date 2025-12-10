@@ -13,7 +13,7 @@ from dogpile.cache.backends.file import AbstractFileLock
 from dogpile.cache.region import DefaultInvalidationStrategy
 from dogpile.util.readwrite_lock import ReadWriteMutex
 
-from .config import _get_caller_namespace, config, get_config, is_disabled
+from .config import _get_caller_package, config, get_config, is_disabled
 
 logger = logging.getLogger(__name__)
 
@@ -145,7 +145,7 @@ def get_redis_client(namespace: str | None = None) -> Any:
             "Redis support requires the 'redis' package. Install with: pip install redis"
         ) from e
     if namespace is None:
-        namespace = _get_caller_namespace()
+        namespace = _get_caller_package()
     cfg = get_config(namespace)
     connection_kwargs = {}
     if cfg.redis_ssl:
@@ -284,9 +284,9 @@ def _handle_all_regions(regions_dict: dict[tuple[str | None, int], CacheRegionWr
             seconds: int | None = None,
             namespace: str | None = None,
             *,
-            caller_namespace: str | None = None,
+            package: str | None = None,
         ) -> None:
-            resolved_ns = caller_namespace if caller_namespace is not None else _get_caller_namespace()
+            resolved_ns = package if package is not None else _get_caller_package()
             if seconds is None:
                 regions_to_clear = [
                     (ns, secs) for (ns, secs) in regions_dict
@@ -309,11 +309,11 @@ _region_lock = threading.Lock()
 _memory_cache_regions: dict[tuple[str | None, int], CacheRegionWrapper] = {}
 
 
-def memorycache(seconds: int, *, caller_namespace: str | None = None) -> CacheRegionWrapper:
+def memorycache(seconds: int, *, package: str | None = None) -> CacheRegionWrapper:
     """Create or retrieve a memory cache region with a specified expiration time.
     """
     with _region_lock:
-        namespace = caller_namespace if caller_namespace is not None else _get_caller_namespace()
+        namespace = package if package is not None else _get_caller_package()
         cfg = get_config(namespace)
         key = (namespace, seconds)
 
@@ -333,11 +333,11 @@ def memorycache(seconds: int, *, caller_namespace: str | None = None) -> CacheRe
 _file_cache_regions: dict[tuple[str | None, int], CacheRegionWrapper] = {}
 
 
-def filecache(seconds: int, *, caller_namespace: str | None = None) -> CacheRegionWrapper:
+def filecache(seconds: int, *, package: str | None = None) -> CacheRegionWrapper:
     """Create or retrieve a file cache region with a specified expiration time.
     """
     with _region_lock:
-        namespace = caller_namespace if caller_namespace is not None else _get_caller_namespace()
+        namespace = package if package is not None else _get_caller_package()
         cfg = get_config(namespace)
         key = (namespace, seconds)
 
@@ -381,11 +381,11 @@ def filecache(seconds: int, *, caller_namespace: str | None = None) -> CacheRegi
 _redis_cache_regions: dict[tuple[str | None, int], CacheRegionWrapper] = {}
 
 
-def rediscache(seconds: int, *, caller_namespace: str | None = None) -> CacheRegionWrapper:
+def rediscache(seconds: int, *, package: str | None = None) -> CacheRegionWrapper:
     """Create or retrieve a Redis cache region with a specified expiration time.
     """
     with _region_lock:
-        namespace = caller_namespace if caller_namespace is not None else _get_caller_namespace()
+        namespace = package if package is not None else _get_caller_package()
         cfg = get_config(namespace)
         key = (namespace, seconds)
 
@@ -432,18 +432,18 @@ def clear_memorycache(
 ) -> None:
     """Clear a memory cache region.
     """
-    caller_ns = _resolved_namespace if _resolved_namespace is not None else _get_caller_namespace()
-    region_key = (caller_ns, seconds)
+    pkg = _resolved_namespace if _resolved_namespace is not None else _get_caller_package()
+    region_key = (pkg, seconds)
 
     if region_key not in _memory_cache_regions:
-        logger.warning(f'No memory cache region exists for namespace "{caller_ns}", {seconds} seconds')
+        logger.warning(f'No memory cache region exists for namespace "{pkg}", {seconds} seconds')
         return
 
     cache_dict = _memory_cache_regions[region_key].actual_backend._cache
 
     if namespace is None:
         cache_dict.clear()
-        logger.debug(f'Cleared all memory cache keys for namespace "{caller_ns}", {seconds} second region')
+        logger.debug(f'Cleared all memory cache keys for namespace "{pkg}", {seconds} second region')
     else:
         matches_namespace = _create_namespace_filter(namespace)
         keys_to_delete = [key for key in list(cache_dict.keys()) if matches_namespace(key)]
@@ -461,12 +461,12 @@ def clear_filecache(
 ) -> None:
     """Clear a file cache region.
     """
-    caller_ns = _resolved_namespace if _resolved_namespace is not None else _get_caller_namespace()
-    cfg = get_config(caller_ns)
-    region_key = (caller_ns, seconds)
+    pkg = _resolved_namespace if _resolved_namespace is not None else _get_caller_package()
+    cfg = get_config(pkg)
+    region_key = (pkg, seconds)
 
     if region_key not in _file_cache_regions:
-        logger.warning(f'No file cache region exists for namespace "{caller_ns}", {seconds} seconds')
+        logger.warning(f'No file cache region exists for namespace "{pkg}", {seconds} seconds')
         return
 
     filename = _file_cache_regions[region_key].actual_backend.filename
@@ -476,7 +476,7 @@ def clear_filecache(
     if namespace is None:
         with dbm.open(filepath, 'n'):
             pass
-        logger.debug(f'Cleared all file cache keys for namespace "{caller_ns}", {seconds} second region')
+        logger.debug(f'Cleared all file cache keys for namespace "{pkg}", {seconds} second region')
     else:
         matches_namespace = _create_namespace_filter(namespace)
         with dbm.open(filepath, 'w') as db:
@@ -498,9 +498,9 @@ def clear_rediscache(
 ) -> None:
     """Clear a redis cache region.
     """
-    caller_ns = _resolved_namespace if _resolved_namespace is not None else _get_caller_namespace()
-    cfg = get_config(caller_ns)
-    client = get_redis_client(caller_ns)
+    pkg = _resolved_namespace if _resolved_namespace is not None else _get_caller_package()
+    cfg = get_config(pkg)
+    client = get_redis_client(pkg)
 
     try:
         region_name = _seconds_to_region_name(seconds)
@@ -625,11 +625,11 @@ def clear_cache_for_namespace(
     backends = [backend] if backend else ['memory', 'file', 'redis']
     for b in backends:
         if b == 'memory':
-            clear_memorycache(seconds=seconds, caller_namespace=namespace)
+            clear_memorycache(seconds=seconds, package=namespace)
         elif b == 'file':
-            clear_filecache(seconds=seconds, caller_namespace=namespace)
+            clear_filecache(seconds=seconds, package=namespace)
         elif b == 'redis':
-            clear_rediscache(seconds=seconds, caller_namespace=namespace)
+            clear_rediscache(seconds=seconds, package=namespace)
 
 
 if __name__ == '__main__':

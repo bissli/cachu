@@ -282,19 +282,19 @@ clear_memorycache(namespace="users")
 
 ### Cross-Module Cache Clearing
 
-When clearing caches from a different module than where the cache decorators were applied, use the `caller_namespace` parameter or the `clear_cache_for_namespace()` helper:
+When clearing caches from a different module than where the cache decorators were applied, use the `package` parameter or the `clear_cache_for_namespace()` helper:
 
 ```python
 from cache import clear_memorycache, clear_cache_for_namespace
 
-# In myapp/service.py - cache is created with namespace "myapp"
+# In myapp/service.py - cache is created with package "myapp"
 @memorycache(seconds=300).cache_on_arguments()
 def get_data(id):
     return fetch_data(id)
 
 # In tests/conftest.py - clearing from different module
-# Without caller_namespace, this would look for "tests" namespace and fail silently
-clear_memorycache(seconds=300, caller_namespace="myapp")
+# Without package, this would look for "tests" package and fail silently
+clear_memorycache(seconds=300, package="myapp")
 
 # Or use the helper function for convenience
 clear_cache_for_namespace("myapp", backend="memory", seconds=300)

@@ -1,7 +1,7 @@
 """Test namespace isolation for cache configurations and regions.
 """
 import cache
-from cache.config import ConfigRegistry, _get_caller_namespace
+from cache.config import ConfigRegistry, _get_caller_package
 
 
 class TestConfigRegistry:
@@ -148,16 +148,16 @@ class TestKeyManglerCapture:
         assert all(k.startswith('v1:') for k in keys)
 
 
-class TestGetCallerNamespace:
-    """Tests for _get_caller_namespace function."""
+class TestGetCallerPackage:
+    """Tests for _get_caller_package function."""
 
-    def test_get_caller_namespace_returns_string(self):
-        """Verify _get_caller_namespace returns a string or None."""
-        ns = _get_caller_namespace()
+    def test_get_caller_package_returns_string(self):
+        """Verify _get_caller_package returns a string or None."""
+        ns = _get_caller_package()
         assert ns is None or isinstance(ns, str)
 
-    def test_get_caller_namespace_excludes_cache_package(self):
-        """Verify _get_caller_namespace skips cache package frames."""
+    def test_get_caller_package_excludes_cache_package(self):
+        """Verify _get_caller_package skips cache package frames."""
         # When called from test code, should return test module name
-        ns = _get_caller_namespace()
+        ns = _get_caller_package()
         assert ns is None or not ns.startswith('cache')

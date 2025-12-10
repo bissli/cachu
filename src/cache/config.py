@@ -36,7 +36,7 @@ def is_disabled() -> bool:
     return _disabled
 
 
-def _get_caller_namespace() -> str | None:
+def _get_caller_package() -> str | None:
     """Get the top-level package name of the caller.
     """
     for frame_info in inspect.stack():
@@ -96,7 +96,7 @@ class ConfigRegistry:
     ) -> CacheConfig:
         """Configure cache for a specific namespace."""
         if namespace is None:
-            namespace = _get_caller_namespace()
+            namespace = _get_caller_package()
 
         updates = {
             'debug_key': debug_key,
@@ -159,7 +159,7 @@ class ConfigRegistry:
         """Get config for a namespace, with fallback to default.
         """
         if namespace is None:
-            namespace = _get_caller_namespace()
+            namespace = _get_caller_package()
 
         if namespace in self._configs:
             return self._configs[namespace]
@@ -194,7 +194,7 @@ class ConfigProxy:
         return getattr(cfg, name)
 
     def __repr__(self) -> str:
-        namespace = _get_caller_namespace()
+        namespace = _get_caller_package()
         cfg = _registry.get_config(namespace)
         return f'ConfigProxy(namespace={namespace!r}, config={cfg!r})'
 
