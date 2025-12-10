@@ -57,29 +57,54 @@ class ConfigRegistry:
         self._configs: dict[str | None, CacheConfig] = {}
         self._default = CacheConfig()
 
-    def configure(self, namespace: str | None = None, **kwargs) -> CacheConfig:
-        """Configure cache for a specific namespace.
-        """
+    def configure(
+        self,
+        namespace: str | None = None,
+        debug_key: str | None = None,
+        memory: str | None = None,
+        file: str | None = None,
+        redis: str | None = None,
+        redis_host: str | None = None,
+        redis_port: int | None = None,
+        redis_db: int | None = None,
+        redis_distributed: bool | None = None,
+        redis_ssl: bool | None = None,
+        tmpdir: str | None = None,
+        default_backend: str | None = None,
+    ) -> CacheConfig:
+        """Configure cache for a specific namespace."""
         if namespace is None:
             namespace = _get_caller_namespace()
 
-        self._validate_config(kwargs)
+        updates = {
+            'debug_key': debug_key,
+            'memory': memory,
+            'file': file,
+            'redis': redis,
+            'redis_host': redis_host,
+            'redis_port': redis_port,
+            'redis_db': redis_db,
+            'redis_distributed': redis_distributed,
+            'redis_ssl': redis_ssl,
+            'tmpdir': str(tmpdir),
+            'default_backend': default_backend,
+        }
+        updates = {k: v for k, v in updates.items() if v is not None}
 
-        if kwargs.get('redis') == 'dogpile.cache.null':
-            kwargs.setdefault('redis_distributed', False)
+        self._validate_config(updates)
+
+        if redis == 'dogpile.cache.null' and redis_distributed is None:
+            updates['redis_distributed'] = False
 
         if namespace not in self._configs:
             self._configs[namespace] = replace(self._default)
             logger.debug(f"Created new cache config for namespace '{namespace}'")
 
         cfg = self._configs[namespace]
-        for key, value in kwargs.items():
-            if hasattr(cfg, key):
-                setattr(cfg, key, value)
-            else:
-                raise ValueError(f'Unknown configuration key: {key}')
+        for key, value in updates.items():
+            setattr(cfg, key, value)
 
-        logger.debug(f"Configured cache for namespace '{namespace}': {kwargs}")
+        logger.debug(f"Configured cache for namespace '{namespace}': {updates}")
         return cfg
 
     def _validate_config(self, kwargs: dict[str, Any]) -> None:
@@ -156,29 +181,37 @@ class ConfigProxy:
 config = ConfigProxy()
 
 
-def configure(**kwargs) -> CacheConfig:
+def configure(
+    debug_key: str | None = None,
+    memory: str | None = None,
+    file: str | None = None,
+    redis: str | None = None,
+    redis_host: str | None = None,
+    redis_port: int | None = None,
+    redis_db: int | None = None,
+    redis_distributed: bool | None = None,
+    redis_ssl: bool | None = None,
+    tmpdir: str | None = None,
+    default_backend: str | None = None,
+) -> CacheConfig:
     """Configure cache settings for the caller's namespace.
 
     This is the main entry point for configuration. Each calling package
     gets its own isolated configuration.
-
-    Args:
-        debug_key: Prefix for cache keys (default: "")
-        memory: Backend for memory cache (default: "dogpile.cache.null")
-        file: Backend for file cache (default: "dogpile.cache.dbm")
-        redis: Backend for redis cache (default: "dogpile.cache.null")
-        redis_host: Redis server hostname (default: "localhost")
-        redis_port: Redis server port (default: 6379)
-        redis_db: Redis database number (default: 0)
-        redis_distributed: Use distributed locks for Redis (default: False)
-        redis_ssl: Use SSL for Redis connection (default: False)
-        tmpdir: Directory for file-based caches (default: "/tmp")
-        default_backend: Backend for defaultcache() - 'memory', 'redis', or 'file'
-
-    Returns
-        The CacheConfig for the caller's namespace.
     """
-    return _registry.configure(**kwargs)
+    return _registry.configure(
+        debug_key=debug_key,
+        memory=memory,
+        file=file,
+        redis=redis,
+        redis_host=redis_host,
+        redis_port=redis_port,
+        redis_db=redis_db,
+        redis_distributed=redis_distributed,
+        redis_ssl=redis_ssl,
+        tmpdir=str(tmpdir),
+        default_backend=default_backend,
+    )
 
 
 def get_config(namespace: str | None = None) -> CacheConfig:
