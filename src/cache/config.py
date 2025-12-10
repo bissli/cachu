@@ -16,6 +16,7 @@ class CacheConfig:
     redis_distributed: bool = False
     redis_ssl: bool = False
     tmpdir: str = '/tmp'
+    default_backend: str = 'memory'
 
 
 config = CacheConfig()
@@ -34,6 +35,7 @@ def configure(**kwargs) -> None:
         redis_distributed: Use distributed locks for Redis (default: False)
         redis_ssl: Use SSL for Redis connection (default: False)
         tmpdir: Directory for file-based caches (default: "/tmp")
+        default_backend: Backend for defaultcache() - 'memory', 'redis', or 'file' (default: 'memory')
     """
     for key, value in kwargs.items():
         if hasattr(config, key):

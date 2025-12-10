@@ -611,5 +611,54 @@ def delete_rediscache_key(seconds: int, namespace: str, fn: Callable[..., Any], 
     logger.debug(f'Deleted redis cache key for {fn.__name__} in namespace "{namespace}"')
 
 
+_BACKEND_MAP = {
+    'memory': (memorycache, clear_memorycache, set_memorycache_key, delete_memorycache_key),
+    'redis': (rediscache, clear_rediscache, set_rediscache_key, delete_rediscache_key),
+    'file': (filecache, clear_filecache, set_filecache_key, delete_filecache_key),
+}
+
+
+def defaultcache(seconds: int) -> CacheRegionWrapper:
+    """Return cache region based on configured default backend.
+
+    The backend is determined by config.default_backend which can be 'memory',
+    'redis', or 'file'. This allows applications to switch cache backends
+    via configuration (e.g., memory in dev, redis in prod).
+
+    Parameters
+        seconds: The expiration time in seconds for caching.
+
+    Returns
+        A configured cache region wrapper.
+    """
+    backend = config.default_backend
+    if backend not in _BACKEND_MAP:
+        raise ValueError(f'Unknown default_backend: {backend}. Must be one of: {list(_BACKEND_MAP.keys())}')
+    return _BACKEND_MAP[backend][0](seconds)
+
+
+def clear_defaultcache(seconds: int | None = None, namespace: str | None = None) -> None:
+    """Clear the default cache region.
+
+    Parameters
+        seconds: Expiration time in seconds that identifies the region to clear.
+                 If None, clears all regions (or requires namespace for redis).
+        namespace: Optional namespace to filter which keys to clear.
+    """
+    return _BACKEND_MAP[config.default_backend][1](seconds, namespace)
+
+
+def set_defaultcache_key(seconds: int, namespace: str, fn: Callable[..., Any], value: Any, **kwargs) -> None:
+    """Set a specific cached entry in default cache.
+    """
+    return _BACKEND_MAP[config.default_backend][2](seconds, namespace, fn, value, **kwargs)
+
+
+def delete_defaultcache_key(seconds: int, namespace: str, fn: Callable[..., Any], **kwargs) -> None:
+    """Delete a specific cached entry from default cache.
+    """
+    return _BACKEND_MAP[config.default_backend][3](seconds, namespace, fn, **kwargs)
+
+
 if __name__ == '__main__':
     __import__('doctest').testmod(optionflags=4 | 8 | 32)
