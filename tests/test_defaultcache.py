@@ -44,14 +44,12 @@ def test_defaultcache_routes_to_file(temp_cache_dir):
 
 
 def test_defaultcache_invalid_backend():
-    """Verify defaultcache raises error for invalid backend.
+    """Verify configure raises error for invalid backend.
     """
-    cache.configure(default_backend='invalid')
-
     with pytest.raises(ValueError) as exc_info:
-        cache.defaultcache(seconds=300)
+        cache.configure(default_backend='invalid')
 
-    assert 'Unknown default_backend' in str(exc_info.value)
+    assert 'default_backend must be one of' in str(exc_info.value)
 
 
 def test_defaultcache_with_namespace():

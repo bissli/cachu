@@ -5,8 +5,10 @@ configuration conflicts when multiple libraries use the cache package.
 """
 import inspect
 import logging
+import os
 from dataclasses import dataclass, replace
 from typing import Any
+import pathlib
 
 logger = logging.getLogger(__name__)
 
@@ -57,12 +59,12 @@ class ConfigRegistry:
         if namespace is None:
             namespace = _get_caller_namespace()
 
-        # Safety: if redis is null, disable distributed locking
+        self._validate_config(kwargs)
+
         if kwargs.get('redis') == 'dogpile.cache.null':
             kwargs.setdefault('redis_distributed', False)
 
         if namespace not in self._configs:
-            # Copy from default so settings like tmpdir are inherited
             self._configs[namespace] = replace(self._default)
             logger.debug(f"Created new cache config for namespace '{namespace}'")
 
@@ -75,6 +77,32 @@ class ConfigRegistry:
 
         logger.debug(f"Configured cache for namespace '{namespace}': {kwargs}")
         return cfg
+
+    def _validate_config(self, kwargs: dict[str, Any]) -> None:
+        """Validate configuration values.
+        """
+        if 'redis_port' in kwargs:
+            port = kwargs['redis_port']
+            if not isinstance(port, int) or port < 1 or port > 65535:
+                raise ValueError(f'redis_port must be an integer between 1 and 65535, got {port}')
+
+        if 'redis_db' in kwargs:
+            db = kwargs['redis_db']
+            if not isinstance(db, int) or db < 0:
+                raise ValueError(f'redis_db must be a non-negative integer, got {db}')
+
+        if 'tmpdir' in kwargs:
+            tmpdir = kwargs['tmpdir']
+            if not pathlib.Path(tmpdir).is_dir():
+                raise ValueError(f'tmpdir must be an existing directory, got {tmpdir!r}')
+            if not os.access(tmpdir, os.W_OK):
+                raise ValueError(f'tmpdir must be writable, got {tmpdir!r}')
+
+        if 'default_backend' in kwargs:
+            backend = kwargs['default_backend']
+            valid_backends = ('memory', 'redis', 'file')
+            if backend not in valid_backends:
+                raise ValueError(f'default_backend must be one of {valid_backends}, got {backend!r}')
 
     def get_config(self, namespace: str | None = None) -> CacheConfig:
         """Get config for a namespace, with fallback to default.

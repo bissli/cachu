@@ -14,13 +14,13 @@ def test_default_configuration():
     assert default_config.tmpdir == '/tmp'
 
 
-def test_configure_updates_settings():
+def test_configure_updates_settings(tmp_path):
     """Verify configure() updates global configuration.
     """
-    cache.configure(debug_key='v2:', tmpdir='/var/cache')
+    cache.configure(debug_key='v2:', tmpdir=str(tmp_path))
     cfg = cache.config
     assert cfg.debug_key == 'v2:'
-    assert cfg.tmpdir == '/var/cache'
+    assert cfg.tmpdir == str(tmp_path)
 
 
 def test_configure_rejects_invalid_keys():
