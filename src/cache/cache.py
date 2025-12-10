@@ -423,6 +423,20 @@ def filecache(seconds: int) -> CacheRegionWrapper:
     cfg = get_config(namespace)
     key = (namespace, seconds)
 
+    # If file backend is null, create a null region (no-op caching)
+    if cfg.file == 'dogpile.cache.null':
+        logger.debug(
+            f"filecache() called from '{namespace}' with null backend - "
+            f"caching disabled for this region."
+        )
+        if key not in _file_cache_regions:
+            name = _seconds_to_region_name(seconds)
+            region = make_region(name=name, function_key_generator=key_generator,
+                                 key_mangler=_make_key_mangler(cfg.debug_key))
+            region.configure('dogpile.cache.null')
+            _file_cache_regions[key] = _wrap_cache_on_arguments(region)
+        return _file_cache_regions[key]
+
     if seconds < 60:
         filename = f'cache{seconds}sec'
     elif seconds < 3600:
@@ -439,7 +453,7 @@ def filecache(seconds: int) -> CacheRegionWrapper:
             function_key_generator=key_generator,
             key_mangler=_make_key_mangler(cfg.debug_key),
         ).configure(
-            'dogpile.cache.dbm',
+            cfg.file,
             expiration_time=seconds,
             arguments={
                 'filename': os.path.join(cfg.tmpdir, filename),
@@ -459,8 +473,8 @@ def rediscache(seconds: int) -> CacheRegionWrapper:
 
     Each calling namespace (package) gets its own isolated region.
 
-    If the namespace's config has redis='dogpile.cache.null', falls back to
-    memorycache to prevent silent failures.
+    If the namespace's config has redis='dogpile.cache.null', creates a null
+    region (no-op caching) to respect the explicit configuration.
 
     Parameters
         seconds: The expiration time in seconds for caching.
@@ -472,13 +486,19 @@ def rediscache(seconds: int) -> CacheRegionWrapper:
     cfg = get_config(namespace)
     key = (namespace, seconds)
 
-    # Safety: if redis backend is null, fall back to memory cache
+    # If redis backend is null, create a null region (no-op caching)
     if cfg.redis == 'dogpile.cache.null':
-        logger.warning(
-            f"rediscache() called from '{namespace}' but redis backend is null. "
-            f"Falling back to memorycache({seconds})."
+        logger.debug(
+            f"rediscache() called from '{namespace}' with null backend - "
+            f"caching disabled for this region."
         )
-        return memorycache(seconds)
+        if key not in _redis_cache_regions:
+            name = _seconds_to_region_name(seconds)
+            region = make_region(name=name, function_key_generator=key_generator,
+                                 key_mangler=_make_region_key_mangler(cfg.debug_key, name))
+            region.configure('dogpile.cache.null')
+            _redis_cache_regions[key] = _wrap_cache_on_arguments(region)
+        return _redis_cache_regions[key]
 
     if key not in _redis_cache_regions:
         name = _seconds_to_region_name(seconds)

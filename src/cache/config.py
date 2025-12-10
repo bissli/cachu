@@ -33,6 +33,7 @@ class CacheConfig:
     """Configuration for cache backends."""
     debug_key: str = ''
     memory: str = 'dogpile.cache.null'
+    file: str = 'dogpile.cache.dbm'
     redis: str = 'dogpile.cache.null'
     redis_host: str = 'localhost'
     redis_port: int = 6379
@@ -148,6 +149,7 @@ def configure(**kwargs) -> CacheConfig:
     Args:
         debug_key: Prefix for cache keys (default: "")
         memory: Backend for memory cache (default: "dogpile.cache.null")
+        file: Backend for file cache (default: "dogpile.cache.dbm")
         redis: Backend for redis cache (default: "dogpile.cache.null")
         redis_host: Redis server hostname (default: "localhost")
         redis_port: Redis server port (default: 6379)

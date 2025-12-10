@@ -177,43 +177,6 @@ class TestClearAllRegions:
         assert len(cache.cache._redis_cache_regions) == 0
 
 
-class TestRediscacheFallback:
-    """Tests for rediscache fallback to memorycache."""
-
-    def test_rediscache_falls_back_to_memorycache_when_redis_null(self):
-        """Verify rediscache returns memorycache region when redis backend is null."""
-        cache.configure(redis='dogpile.cache.null', memory='dogpile.cache.memory_pickle')
-
-        @cache.rediscache(seconds=300).cache_on_arguments()
-        def func(x: int) -> int:
-            return x * 2
-
-        result = func(5)
-
-        assert result == 10
-        # Should have created a memory region, not redis
-        from conftest import has_memory_region, has_redis_region
-        assert has_memory_region(300)
-        assert not has_redis_region(300)
-
-    def test_rediscache_fallback_caches_correctly(self):
-        """Verify fallback memorycache actually caches values."""
-        cache.configure(redis='dogpile.cache.null', memory='dogpile.cache.memory_pickle')
-
-        call_count = 0
-
-        @cache.rediscache(seconds=300).cache_on_arguments()
-        def func(x: int) -> int:
-            nonlocal call_count
-            call_count += 1
-            return x * 2
-
-        func(5)
-        func(5)
-
-        assert call_count == 1
-
-
 class TestKeyManglerCapture:
     """Tests for key mangler debug_key capture at region creation time."""
 
