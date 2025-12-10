@@ -21,6 +21,34 @@ HERE = pathlib.Path(pathlib.Path(__file__).resolve()).parent
 site.addsitedir(HERE)
 
 
+def _clear_all_regions() -> None:
+    """Clear all cache regions (internal test helper).
+    """
+    import dbm
+    for region in cache.cache._memory_cache_regions.values():
+        try:
+            region.actual_backend._cache.clear()
+        except Exception:
+            pass
+    for region in cache.cache._file_cache_regions.values():
+        try:
+            filename = region.actual_backend.filename
+            with dbm.open(filename, 'n'):
+                pass
+        except Exception:
+            pass
+    for region in cache.cache._redis_cache_regions.values():
+        try:
+            client = region.actual_backend.writer_client
+            for key in client.scan_iter(match=f'{region.name}:*'):
+                client.delete(key)
+        except Exception:
+            pass
+    cache.cache._memory_cache_regions.clear()
+    cache.cache._file_cache_regions.clear()
+    cache.cache._redis_cache_regions.clear()
+
+
 @pytest.fixture(autouse=True)
 def reset_cache_config(request):
     """Reset cache configuration and clear cache regions before each test.
@@ -28,10 +56,11 @@ def reset_cache_config(request):
     Since namespace isolation is now enabled, we configure the registry's
     default config directly so all test namespaces use the test settings.
     """
-    from cache.config import CacheConfig, _registry
+    from cache.config import CacheConfig, _registry, enable
 
-    cache.clear_all_regions()
-    cache.clear_registry()
+    enable()
+    _clear_all_regions()
+    _registry._configs.clear()
 
     is_redis_test = 'redis' in [marker.name for marker in request.node.iter_markers()]
 
@@ -46,17 +75,14 @@ def reset_cache_config(request):
             params.get('fixture_needed') == 'redis_docker'
         )
 
-    # For redis tests, ensure the fixture runs first to get dynamic port
     redis_host = 'localhost'
     redis_port = 6379
     if is_redis_test:
         request.getfixturevalue('redis_docker')
-        # Import the config from the fixture module
         from fixtures.redis import redis_test_config
         redis_host = redis_test_config.host
         redis_port = redis_test_config.port
 
-    # Configure the registry's default config so all test namespaces use these settings
     _registry._default = CacheConfig(
         debug_key='test:',
         memory='dogpile.cache.memory_pickle',
@@ -77,8 +103,8 @@ def reset_cache_config(request):
         except Exception:
             pass
     yield
-    cache.clear_all_regions()
-    cache.clear_registry()
+    _clear_all_regions()
+    _registry._configs.clear()
     _registry._default = CacheConfig()
 
 

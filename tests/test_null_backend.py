@@ -50,9 +50,6 @@ def test_rediscache_with_null_backend_does_not_create_memory_region():
     """Verify rediscache() with null backend doesn't fall back to memory."""
     from conftest import has_memory_region
 
-    # Clear any existing regions
-    cache.clear_all_regions()
-
     @cache.rediscache(seconds=600).cache_on_arguments()
     def func(x: int) -> int:
         return x * 2

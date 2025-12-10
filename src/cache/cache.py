@@ -13,7 +13,7 @@ from dogpile.cache.backends.file import AbstractFileLock
 from dogpile.cache.region import DefaultInvalidationStrategy
 from dogpile.util.readwrite_lock import ReadWriteMutex
 
-from .config import _get_caller_namespace, config, get_config
+from .config import _get_caller_namespace, config, get_config, is_disabled
 
 logger = logging.getLogger(__name__)
 
@@ -66,9 +66,10 @@ def key_generator(namespace: str, fn: Callable[..., Any], exclude_params: set[st
     """Generate a cache key for the given namespace and function.
     """
     exclude_params = exclude_params or set()
-    namespace = f'{fn.__name__}|{_normalize_namespace(namespace)}' if namespace else f'{fn.__name__}'
+    unwrapped_fn = getattr(fn, '__wrapped__', fn)
+    namespace = f'{unwrapped_fn.__name__}|{_normalize_namespace(namespace)}' if namespace else f'{unwrapped_fn.__name__}'
 
-    argspec = inspect.getfullargspec(fn)
+    argspec = inspect.getfullargspec(unwrapped_fn)
     _args_reversed = list(reversed(argspec.args or []))
     _defaults_reversed = list(reversed(argspec.defaults or []))
     args_with_defaults = { _args_reversed[i]: default for i, default in enumerate(_defaults_reversed)}
@@ -175,17 +176,29 @@ class CacheRegionWrapper:
         """
         if exclude_params:
             custom_key_gen = partial(key_generator, exclude_params=exclude_params)
-            return self._original_cache_on_arguments(
+            cache_decorator = self._original_cache_on_arguments(
                 namespace=namespace,
                 should_cache_fn=should_cache_fn,
                 function_key_generator=custom_key_gen,
                 **kwargs
             )
-        return self._original_cache_on_arguments(
-            namespace=namespace,
-            should_cache_fn=should_cache_fn,
-            **kwargs
-        )
+        else:
+            cache_decorator = self._original_cache_on_arguments(
+                namespace=namespace,
+                should_cache_fn=should_cache_fn,
+                **kwargs
+            )
+
+        def decorator(fn: Callable) -> Callable:
+            cached_fn = cache_decorator(fn)
+
+            @wraps(fn)
+            def wrapper(*args, **kw):
+                if is_disabled():
+                    return fn(*args, **kw)
+                return cached_fn(*args, **kw)
+            return wrapper
+        return decorator
 
     def __getattr__(self, name: str) -> Any:
         """Delegate all other attributes to the wrapped region.
@@ -617,47 +630,6 @@ def clear_cache_for_namespace(
             clear_filecache(seconds=seconds, caller_namespace=namespace)
         elif b == 'redis':
             clear_rediscache(seconds=seconds, caller_namespace=namespace)
-
-
-def clear_all_regions(clear_registry: bool = True) -> None:
-    """Clear all cache regions across all namespaces. Primarily for testing.
-
-    clear_registry: If True (default), also clear the registry dictionaries.
-        Set to False when clearing cache between tests that use decorated
-        functions, since decorated functions hold references to their region
-        objects. If the registry is cleared, new regions would be created
-        but the decorated functions would still use the old ones with stale
-        data.
-    """
-    for region in _memory_cache_regions.values():
-        try:
-            region.actual_backend._cache.clear()
-        except Exception:
-            pass
-
-    for region in _file_cache_regions.values():
-        try:
-            filename = region.actual_backend.filename
-            with dbm.open(filename, 'n'):
-                pass  # Truncates the file
-        except Exception:
-            pass
-
-    for region in _redis_cache_regions.values():
-        try:
-            client = region.actual_backend.writer_client
-            for key in client.scan_iter(match=f'{region.name}:*'):
-                client.delete(key)
-        except Exception:
-            pass
-
-    if clear_registry:
-        _memory_cache_regions.clear()
-        _file_cache_regions.clear()
-        _redis_cache_regions.clear()
-        logger.debug('Cleared all cache regions and their data')
-    else:
-        logger.debug('Cleared all cache regions data')
 
 
 if __name__ == '__main__':

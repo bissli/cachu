@@ -1,7 +1,6 @@
 """Test namespace isolation for cache configurations and regions.
 """
 import cache
-import pytest
 from cache.config import ConfigRegistry, _get_caller_namespace
 
 
@@ -105,69 +104,6 @@ class TestGetConfig:
         cfg = cache.get_config(namespace='explicit_ns')
 
         assert cfg.debug_key == 'explicit:'
-
-
-class TestClearRegistry:
-    """Tests for clear_registry function."""
-
-    def test_clear_registry_removes_namespace_configs(self):
-        """Verify clear_registry clears all namespace-specific configurations."""
-        from cache.config import _registry
-
-        # Create a namespace-specific config
-        cache.configure(debug_key='v1:')
-        namespaces_before = _registry.get_all_namespaces()
-        assert len(namespaces_before) > 0
-
-        cache.clear_registry()
-
-        # Namespace-specific configs should be cleared
-        namespaces_after = _registry.get_all_namespaces()
-        assert len(namespaces_after) == 0
-
-
-class TestClearAllRegions:
-    """Tests for clear_all_regions function."""
-
-    def test_clear_all_regions_clears_memory_regions(self):
-        """Verify clear_all_regions clears memory cache region dictionaries."""
-        @cache.memorycache(seconds=300).cache_on_arguments()
-        def func(x: int) -> int:
-            return x
-
-        func(1)
-        assert len(cache.cache._memory_cache_regions) > 0
-
-        cache.clear_all_regions()
-
-        assert len(cache.cache._memory_cache_regions) == 0
-
-    def test_clear_all_regions_clears_file_regions(self, temp_cache_dir):
-        """Verify clear_all_regions clears file cache region dictionaries."""
-        @cache.filecache(seconds=300).cache_on_arguments()
-        def func(x: int) -> int:
-            return x
-
-        func(1)
-        assert len(cache.cache._file_cache_regions) > 0
-
-        cache.clear_all_regions()
-
-        assert len(cache.cache._file_cache_regions) == 0
-
-    @pytest.mark.redis
-    def test_clear_all_regions_clears_redis_regions(self, redis_docker):
-        """Verify clear_all_regions clears redis cache region dictionaries."""
-        @cache.rediscache(seconds=300).cache_on_arguments()
-        def func(x: int) -> int:
-            return x
-
-        func(1)
-        assert len(cache.cache._redis_cache_regions) > 0
-
-        cache.clear_all_regions()
-
-        assert len(cache.cache._redis_cache_regions) == 0
 
 
 class TestKeyManglerCapture:

@@ -135,6 +135,10 @@ cfg = cache.get_config()
 
 # Get config for a specific namespace
 cfg = cache.get_config(namespace="mypackage")
+
+# Get all configurations (useful for debugging)
+all_configs = cache.get_all_configs()
+# Returns: {'_default': {...}, 'mypackage': {...}, ...}
 ```
 
 ## Usage
@@ -453,20 +457,45 @@ result = get_user_data(connection2, 123)  # Cache hit
 
 ## Testing Utilities
 
-For testing, use `clear_all_regions()` to reset all caches:
+For testing, use `disable()` to bypass all caching:
 
 ```python
-from cache import clear_all_regions
+import cache
 
-def teardown_function():
-    clear_all_regions()  # Clears all cached data and region registries
+# Disable caching globally (e.g., in conftest.py)
+cache.disable()
+
+# All cached functions now execute without caching
+@cache.memorycache(300).cache_on_arguments()
+def get_data(id):
+    return fetch_data(id)  # Always called, never cached
+
+# Re-enable caching when needed
+cache.enable()
+
+# Check current state
+if cache.is_disabled():
+    print("Caching is disabled")
 ```
 
-This function clears:
-- All memory cache data
-- All file cache data (truncates DBM files)
-- All Redis cache keys
-- All internal region registries
+This is the recommended approach for pytest:
+
+```python
+# conftest.py
+import cache
+
+@pytest.fixture(autouse=True)
+def disable_caching():
+    cache.disable()
+    yield
+    cache.enable()
+```
+
+The `disable()` function:
+- Bypasses all cache lookups at call time
+- Works immediately on all existing cached functions
+- No need to clear data since caching is completely bypassed
+- Can be toggled on/off at any point during execution
 
 ## Features
 
@@ -476,6 +505,7 @@ This function clears:
 - **Namespace isolation**: Each calling package gets isolated configuration automatically
 - **Cross-module clearing**: Clear caches from any module using explicit namespace parameters
 - **Configurable default backend**: Switch between memory/file/Redis via configuration with `defaultcache`
+- **Global disable/enable**: Bypass all caching with `disable()` for testing
+- **Configuration introspection**: View all configs with `get_all_configs()`
 - **Intelligent filtering**: Automatically excludes `self`, `cls`, database connections, and underscore-prefixed parameters
 - **Custom key generation**: Smart key generation based on function signatures
-- **Safe fallbacks**: Redis cache falls back to memory cache when Redis is not configured

@@ -13,6 +13,28 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+_disabled: bool = False
+
+
+def disable() -> None:
+    """Disable all caching globally.
+    """
+    global _disabled
+    _disabled = True
+
+
+def enable() -> None:
+    """Re-enable caching after disable().
+    """
+    global _disabled
+    _disabled = False
+
+
+def is_disabled() -> bool:
+    """Check if caching is globally disabled.
+    """
+    return _disabled
+
 
 def _get_caller_namespace() -> str | None:
     """Get the top-level package name of the caller.
@@ -220,7 +242,11 @@ def get_config(namespace: str | None = None) -> CacheConfig:
     return _registry.get_config(namespace)
 
 
-def clear_registry() -> None:
-    """Clear all namespace configurations. Primarily for testing.
+def get_all_configs() -> dict[str | None, dict[str, Any]]:
+    """Return all namespace configurations as a dictionary.
     """
-    _registry.clear()
+    from dataclasses import asdict
+    result: dict[str | None, dict[str, Any]] = {'_default': asdict(_registry._default)}
+    for ns, cfg in _registry._configs.items():
+        result[ns] = asdict(cfg)
+    return result
