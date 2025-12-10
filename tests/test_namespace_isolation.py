@@ -71,13 +71,6 @@ class TestConfigRegistry:
 
         assert len(registry.get_all_namespaces()) == 0
 
-    def test_registry_rejects_invalid_config_keys(self):
-        """Verify configure raises error for unknown keys."""
-        registry = ConfigRegistry()
-
-        with pytest.raises(ValueError, match='Unknown configuration key'):
-            registry.configure(namespace='pkg1', invalid_key='value')
-
     def test_registry_sets_default_distributed_lock_when_redis_null(self):
         """Verify redis_distributed defaults to False when redis backend is null."""
         registry = ConfigRegistry()

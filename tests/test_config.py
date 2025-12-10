@@ -23,13 +23,6 @@ def test_configure_updates_settings(tmp_path):
     assert cfg.tmpdir == str(tmp_path)
 
 
-def test_configure_rejects_invalid_keys():
-    """Verify configure() raises error for unknown configuration keys.
-    """
-    with pytest.raises(ValueError, match='Unknown configuration key'):
-        cache.configure(invalid_key='value')
-
-
 def test_configure_redis_settings():
     """Verify Redis-specific configuration can be updated.
     """

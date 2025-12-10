@@ -619,8 +619,15 @@ def clear_cache_for_namespace(
             clear_rediscache(seconds=seconds, caller_namespace=namespace)
 
 
-def clear_all_regions() -> None:
+def clear_all_regions(clear_registry: bool = True) -> None:
     """Clear all cache regions across all namespaces. Primarily for testing.
+
+    clear_registry: If True (default), also clear the registry dictionaries.
+        Set to False when clearing cache between tests that use decorated
+        functions, since decorated functions hold references to their region
+        objects. If the registry is cleared, new regions would be created
+        but the decorated functions would still use the old ones with stale
+        data.
     """
     for region in _memory_cache_regions.values():
         try:
@@ -644,11 +651,13 @@ def clear_all_regions() -> None:
         except Exception:
             pass
 
-    # Clear the registry dictionaries
-    _memory_cache_regions.clear()
-    _file_cache_regions.clear()
-    _redis_cache_regions.clear()
-    logger.debug('Cleared all cache regions and their data')
+    if clear_registry:
+        _memory_cache_regions.clear()
+        _file_cache_regions.clear()
+        _redis_cache_regions.clear()
+        logger.debug('Cleared all cache regions and their data')
+    else:
+        logger.debug('Cleared all cache regions data')
 
 
 if __name__ == '__main__':

@@ -86,7 +86,7 @@ class ConfigRegistry:
             'redis_db': redis_db,
             'redis_distributed': redis_distributed,
             'redis_ssl': redis_ssl,
-            'tmpdir': str(tmpdir),
+            'tmpdir': str(tmpdir) if tmpdir else None,
             'default_backend': default_backend,
         }
         updates = {k: v for k, v in updates.items() if v is not None}
@@ -209,7 +209,7 @@ def configure(
         redis_db=redis_db,
         redis_distributed=redis_distributed,
         redis_ssl=redis_ssl,
-        tmpdir=str(tmpdir),
+        tmpdir=str(tmpdir) if tmpdir else None,
         default_backend=default_backend,
     )
 
