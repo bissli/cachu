@@ -1,15 +1,15 @@
 """Test default backend routing functionality.
 """
-import cache
+import cachu
 
 
 def test_cache_uses_configured_default_backend():
     """Verify @cache without backend uses configured default.
     """
-    cache.configure(backend='memory')
+    cachu.configure(backend='memory')
     call_count = 0
 
-    @cache.cache(ttl=300)
+    @cachu.cache(ttl=300)
     def expensive_func(x: int) -> int:
         nonlocal call_count
         call_count += 1
@@ -26,10 +26,10 @@ def test_cache_uses_configured_default_backend():
 def test_cache_with_file_default(temp_cache_dir):
     """Verify @cache uses file backend when configured as default.
     """
-    cache.configure(backend='file')
+    cachu.configure(backend='file')
     call_count = 0
 
-    @cache.cache(ttl=300)
+    @cachu.cache(ttl=300)
     def expensive_func(x: int) -> int:
         nonlocal call_count
         call_count += 1
@@ -46,7 +46,7 @@ def test_cache_with_file_default(temp_cache_dir):
 def test_cache_with_tag():
     """Verify @cache works with tag.
     """
-    @cache.cache(ttl=300, backend='memory', tag='users')
+    @cachu.cache(ttl=300, backend='memory', tag='users')
     def get_user(user_id: int) -> dict:
         return {'id': user_id, 'name': 'test'}
 
@@ -59,7 +59,7 @@ def test_cache_clear_by_backend():
     """
     call_count = 0
 
-    @cache.cache(ttl=300, backend='memory')
+    @cachu.cache(ttl=300, backend='memory')
     def expensive_func(x: int) -> int:
         nonlocal call_count
         call_count += 1
@@ -68,7 +68,7 @@ def test_cache_clear_by_backend():
     expensive_func(5)
     assert call_count == 1
 
-    cache.cache_clear(backend='memory', ttl=300)
+    cachu.cache_clear(backend='memory', ttl=300)
 
     expensive_func(5)
     assert call_count == 2
@@ -77,11 +77,11 @@ def test_cache_clear_by_backend():
 def test_cache_set_updates_value():
     """Verify cache_set updates cached value.
     """
-    @cache.cache(ttl=300, backend='memory', tag='test')
+    @cachu.cache(ttl=300, backend='memory', tag='test')
     def get_value(key: str) -> str:
         return f'computed_{key}'
 
-    cache.cache_set(get_value, 'preset_value', key='mykey')
+    cachu.cache_set(get_value, 'preset_value', key='mykey')
 
     result = get_value('mykey')
     assert result == 'preset_value'
@@ -92,7 +92,7 @@ def test_cache_delete_removes_value():
     """
     call_count = 0
 
-    @cache.cache(ttl=300, backend='memory', tag='test')
+    @cachu.cache(ttl=300, backend='memory', tag='test')
     def get_value(key: str) -> str:
         nonlocal call_count
         call_count += 1
@@ -101,7 +101,7 @@ def test_cache_delete_removes_value():
     get_value('mykey')
     assert call_count == 1
 
-    cache.cache_delete(get_value, key='mykey')
+    cachu.cache_delete(get_value, key='mykey')
 
     get_value('mykey')
     assert call_count == 2
@@ -110,11 +110,11 @@ def test_cache_delete_removes_value():
 def test_explicit_backend_overrides_default():
     """Verify explicit backend parameter overrides configured default.
     """
-    cache.configure(backend='file')
+    cachu.configure(backend='file')
 
     call_count = 0
 
-    @cache.cache(ttl=300, backend='memory')
+    @cachu.cache(ttl=300, backend='memory')
     def func(x: int) -> int:
         nonlocal call_count
         call_count += 1

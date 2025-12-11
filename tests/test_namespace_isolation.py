@@ -1,7 +1,7 @@
 """Test package isolation for cache configurations.
 """
-import cache
-from cache.config import ConfigRegistry, _get_caller_package
+import cachu
+from cachu.config import ConfigRegistry, _get_caller_package
 
 
 class TestConfigRegistry:
@@ -76,20 +76,20 @@ class TestGetConfig:
 
     def test_get_config_returns_configured_values(self):
         """Verify get_config returns config for caller's package."""
-        cache.configure(key_prefix='test:', backend='memory')
+        cachu.configure(key_prefix='test:', backend='memory')
 
-        cfg = cache.get_config()
+        cfg = cachu.get_config()
 
         assert cfg.key_prefix == 'test:'
         assert cfg.backend == 'memory'
 
     def test_get_config_with_explicit_package(self):
         """Verify get_config can retrieve config for explicit package."""
-        from cache.config import _registry
+        from cachu.config import _registry
 
         _registry.configure(package='explicit_pkg', key_prefix='explicit:')
 
-        cfg = cache.get_config(package='explicit_pkg')
+        cfg = cachu.get_config(package='explicit_pkg')
 
         assert cfg.key_prefix == 'explicit:'
 
@@ -99,9 +99,9 @@ class TestKeyPrefixCapture:
 
     def test_key_prefix_captured_at_decoration(self):
         """Verify key_prefix is captured when decorator is applied."""
-        cache.configure(key_prefix='v1:', backend='memory')
+        cachu.configure(key_prefix='v1:', backend='memory')
 
-        @cache.cache(ttl=300, backend='memory')
+        @cachu.cache(ttl=300, backend='memory')
         def func(x: int) -> int:
             return x
 
@@ -112,13 +112,13 @@ class TestKeyPrefixCapture:
 
     def test_different_packages_have_different_key_prefixes(self):
         """Verify different packages can have different key prefixes."""
-        from cache.config import _registry
+        from cachu.config import _registry
 
         _registry.configure(package='pkg1', key_prefix='v1:')
         _registry.configure(package='pkg2', key_prefix='v2:')
 
-        cfg1 = cache.get_config(package='pkg1')
-        cfg2 = cache.get_config(package='pkg2')
+        cfg1 = cachu.get_config(package='pkg1')
+        cfg2 = cachu.get_config(package='pkg2')
 
         assert cfg1.key_prefix == 'v1:'
         assert cfg2.key_prefix == 'v2:'
@@ -132,7 +132,7 @@ class TestGetCallerPackage:
         pkg = _get_caller_package()
         assert pkg is None or isinstance(pkg, str)
 
-    def test_get_caller_package_excludes_cache_package(self):
-        """Verify _get_caller_package skips cache package frames."""
+    def test_get_caller_package_excludes_cachu_package(self):
+        """Verify _get_caller_package skips cachu package frames."""
         pkg = _get_caller_package()
-        assert pkg is None or not pkg.startswith('cache')
+        assert pkg is None or not pkg.startswith('cachu')

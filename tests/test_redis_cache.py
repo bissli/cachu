@@ -1,6 +1,6 @@
 """Test Redis cache backend operations.
 """
-import cache
+import cachu
 import pytest
 
 pytestmark = pytest.mark.redis
@@ -11,7 +11,7 @@ def test_redis_cache_basic_decoration(redis_docker):
     """
     call_count = 0
 
-    @cache.cache(ttl=300, backend='redis')
+    @cachu.cache(ttl=300, backend='redis')
     def expensive_func(x: int) -> int:
         nonlocal call_count
         call_count += 1
@@ -30,7 +30,7 @@ def test_redis_cache_different_args(redis_docker):
     """
     call_count = 0
 
-    @cache.cache(ttl=300, backend='redis')
+    @cachu.cache(ttl=300, backend='redis')
     def func(x: int) -> int:
         nonlocal call_count
         call_count += 1
@@ -45,7 +45,7 @@ def test_redis_cache_different_args(redis_docker):
 def test_redis_cache_with_tag(redis_docker):
     """Verify Redis cache tag parameter is accepted.
     """
-    @cache.cache(ttl=300, backend='redis', tag='users')
+    @cachu.cache(ttl=300, backend='redis', tag='users')
     def get_user(user_id: int) -> dict:
         return {'id': user_id, 'name': 'test'}
 
@@ -58,7 +58,7 @@ def test_redis_cache_with_kwargs(redis_docker):
     """
     call_count = 0
 
-    @cache.cache(ttl=300, backend='redis')
+    @cachu.cache(ttl=300, backend='redis')
     def func(x: int, y: int = 10) -> int:
         nonlocal call_count
         call_count += 1
@@ -75,7 +75,7 @@ def test_redis_cache_with_kwargs(redis_docker):
 def test_redis_cache_complex_objects(redis_docker):
     """Verify Redis cache can store complex objects.
     """
-    @cache.cache(ttl=300, backend='redis')
+    @cachu.cache(ttl=300, backend='redis')
     def get_data() -> dict:
         return {
             'users': [{'id': 1, 'name': 'Alice'}, {'id': 2, 'name': 'Bob'}],

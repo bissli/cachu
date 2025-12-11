@@ -1,7 +1,7 @@
 """Configuration module for cache backends with package isolation.
 
 Each calling library gets its own isolated configuration, preventing
-configuration conflicts when multiple libraries use the cache package.
+configuration conflicts when multiple libraries use the cachu package.
 """
 import logging
 import os
@@ -41,7 +41,7 @@ def _get_caller_package() -> str | None:
     frame = sys._getframe(1)
     while frame:
         name = frame.f_globals.get('__name__', '')
-        if name and not name.startswith('cache'):
+        if name and not name.startswith('cachu'):
             pkg = name.split('.')[0]
             if pkg == '__main__' and sys.argv and sys.argv[0]:
                 return f'__main__.{pathlib.Path(sys.argv[0]).stem}'

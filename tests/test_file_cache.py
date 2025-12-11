@@ -1,6 +1,6 @@
 """Test file cache backend operations.
 """
-import cache
+import cachu
 
 
 def test_file_cache_basic_decoration(temp_cache_dir):
@@ -8,7 +8,7 @@ def test_file_cache_basic_decoration(temp_cache_dir):
     """
     call_count = 0
 
-    @cache.cache(ttl=300, backend='file')
+    @cachu.cache(ttl=300, backend='file')
     def expensive_func(x: int) -> int:
         nonlocal call_count
         call_count += 1
@@ -27,7 +27,7 @@ def test_file_cache_different_args(temp_cache_dir):
     """
     call_count = 0
 
-    @cache.cache(ttl=300, backend='file')
+    @cachu.cache(ttl=300, backend='file')
     def func(x: int) -> int:
         nonlocal call_count
         call_count += 1
@@ -42,7 +42,7 @@ def test_file_cache_different_args(temp_cache_dir):
 def test_file_cache_with_tag(temp_cache_dir):
     """Verify tag parameter is accepted and used.
     """
-    @cache.cache(ttl=300, backend='file', tag='users')
+    @cachu.cache(ttl=300, backend='file', tag='users')
     def get_user(user_id: int) -> dict:
         return {'id': user_id, 'name': 'test'}
 
@@ -55,7 +55,7 @@ def test_file_cache_with_kwargs(temp_cache_dir):
     """
     call_count = 0
 
-    @cache.cache(ttl=300, backend='file')
+    @cachu.cache(ttl=300, backend='file')
     def func(x: int, y: int = 10) -> int:
         nonlocal call_count
         call_count += 1
@@ -72,7 +72,7 @@ def test_file_cache_with_kwargs(temp_cache_dir):
 def test_file_cache_complex_objects(temp_cache_dir):
     """Verify file cache can store complex objects.
     """
-    @cache.cache(ttl=300, backend='file')
+    @cachu.cache(ttl=300, backend='file')
     def get_data() -> dict:
         return {
             'users': [{'id': 1, 'name': 'Alice'}, {'id': 2, 'name': 'Bob'}],

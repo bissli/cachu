@@ -1,6 +1,6 @@
 """Test memory cache backend operations.
 """
-import cache
+import cachu
 
 
 def test_memory_cache_basic_decoration():
@@ -8,7 +8,7 @@ def test_memory_cache_basic_decoration():
     """
     call_count = 0
 
-    @cache.cache(ttl=300, backend='memory')
+    @cachu.cache(ttl=300, backend='memory')
     def expensive_func(x: int) -> int:
         nonlocal call_count
         call_count += 1
@@ -27,7 +27,7 @@ def test_memory_cache_different_args():
     """
     call_count = 0
 
-    @cache.cache(ttl=300, backend='memory')
+    @cachu.cache(ttl=300, backend='memory')
     def func(x: int) -> int:
         nonlocal call_count
         call_count += 1
@@ -42,7 +42,7 @@ def test_memory_cache_different_args():
 def test_memory_cache_with_tag():
     """Verify tag parameter is accepted and used.
     """
-    @cache.cache(ttl=300, backend='memory', tag='users')
+    @cachu.cache(ttl=300, backend='memory', tag='users')
     def get_user(user_id: int) -> dict:
         return {'id': user_id, 'name': 'test'}
 
@@ -55,7 +55,7 @@ def test_memory_cache_cache_if():
     """
     call_count = 0
 
-    @cache.cache(ttl=300, backend='memory', cache_if=lambda r: r is not None)
+    @cachu.cache(ttl=300, backend='memory', cache_if=lambda r: r is not None)
     def get_value(x: int) -> int | None:
         nonlocal call_count
         call_count += 1
@@ -74,7 +74,7 @@ def test_memory_cache_with_kwargs():
     """
     call_count = 0
 
-    @cache.cache(ttl=300, backend='memory')
+    @cachu.cache(ttl=300, backend='memory')
     def func(x: int, y: int = 10) -> int:
         nonlocal call_count
         call_count += 1
@@ -89,11 +89,11 @@ def test_memory_cache_with_kwargs():
 
 
 def test_memory_cache_skip_cache():
-    """Verify _skip_cache bypasses the cache.
+    """Verify _skip_cache bypasses the cachu.
     """
     call_count = 0
 
-    @cache.cache(ttl=300, backend='memory')
+    @cachu.cache(ttl=300, backend='memory')
     def func(x: int) -> int:
         nonlocal call_count
         call_count += 1
@@ -113,7 +113,7 @@ def test_memory_cache_overwrite_cache():
     """
     counter = [0]
 
-    @cache.cache(ttl=300, backend='memory')
+    @cachu.cache(ttl=300, backend='memory')
     def func(x: int) -> int:
         counter[0] += 1
         return x * counter[0]
@@ -134,7 +134,7 @@ def test_memory_cache_overwrite_cache():
 def test_memory_cache_info():
     """Verify cache_info returns statistics.
     """
-    @cache.cache(ttl=300, backend='memory')
+    @cachu.cache(ttl=300, backend='memory')
     def func(x: int) -> int:
         return x * 2
 
@@ -143,6 +143,6 @@ def test_memory_cache_info():
     func(10)  # miss
     func(5)  # hit
 
-    info = cache.cache_info(func)
+    info = cachu.cache_info(func)
     assert info.hits == 2
     assert info.misses == 2

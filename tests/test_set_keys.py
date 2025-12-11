@@ -1,6 +1,6 @@
 """Test cache_set functionality for setting specific cache keys.
 """
-import cache
+import cachu
 import pytest
 
 
@@ -9,7 +9,7 @@ def test_cache_set_basic():
     """
     call_count = 0
 
-    @cache.cache(ttl=300, backend='memory', tag='users')
+    @cachu.cache(ttl=300, backend='memory', tag='users')
     def get_user(user_id: int) -> dict:
         nonlocal call_count
         call_count += 1
@@ -23,7 +23,7 @@ def test_cache_set_basic():
     assert result2 == {'id': 123, 'name': 'user_123'}
     assert call_count == 1
 
-    cache.cache_set(get_user, {'id': 123, 'name': 'updated_user'}, user_id=123)
+    cachu.cache_set(get_user, {'id': 123, 'name': 'updated_user'}, user_id=123)
 
     result3 = get_user(123)
     assert result3 == {'id': 123, 'name': 'updated_user'}
@@ -35,7 +35,7 @@ def test_cache_set_with_multiple_params():
     """
     call_count = 0
 
-    @cache.cache(ttl=300, backend='memory', tag='data')
+    @cachu.cache(ttl=300, backend='memory', tag='data')
     def get_data(user_id: int, key: str) -> dict:
         nonlocal call_count
         call_count += 1
@@ -45,7 +45,7 @@ def test_cache_set_with_multiple_params():
     get_data(123, 'settings')
     assert call_count == 2
 
-    cache.cache_set(get_data, {'user_id': 123, 'key': 'profile', 'value': 'updated'}, user_id=123, key='profile')
+    cachu.cache_set(get_data, {'user_id': 123, 'key': 'profile', 'value': 'updated'}, user_id=123, key='profile')
 
     result = get_data(123, 'profile')
     assert result['value'] == 'updated'
@@ -61,7 +61,7 @@ def test_cache_set_with_defaults():
     """
     call_count = 0
 
-    @cache.cache(ttl=300, backend='memory', tag='api')
+    @cachu.cache(ttl=300, backend='memory', tag='api')
     def fetch_data(resource: str, latest: bool = False) -> dict:
         nonlocal call_count
         call_count += 1
@@ -70,7 +70,7 @@ def test_cache_set_with_defaults():
     fetch_data('users', latest=True)
     assert call_count == 1
 
-    cache.cache_set(fetch_data, {'resource': 'users', 'latest': True, 'data': 'updated'}, resource='users', latest=True)
+    cachu.cache_set(fetch_data, {'resource': 'users', 'latest': True, 'data': 'updated'}, resource='users', latest=True)
 
     result = fetch_data('users', latest=True)
     assert result['data'] == 'updated'
@@ -82,7 +82,7 @@ def test_cache_set_file_backend(temp_cache_dir):
     """
     call_count = 0
 
-    @cache.cache(ttl=300, backend='file', tag='items')
+    @cachu.cache(ttl=300, backend='file', tag='items')
     def get_item(item_id: int) -> dict:
         nonlocal call_count
         call_count += 1
@@ -91,7 +91,7 @@ def test_cache_set_file_backend(temp_cache_dir):
     get_item(100)
     assert call_count == 1
 
-    cache.cache_set(get_item, {'id': 100, 'data': 'updated_data'}, item_id=100)
+    cachu.cache_set(get_item, {'id': 100, 'data': 'updated_data'}, item_id=100)
 
     result = get_item(100)
     assert result['data'] == 'updated_data'
@@ -104,7 +104,7 @@ def test_cache_set_redis_backend(redis_docker):
     """
     call_count = 0
 
-    @cache.cache(ttl=300, backend='redis', tag='items')
+    @cachu.cache(ttl=300, backend='redis', tag='items')
     def get_item(item_id: int) -> dict:
         nonlocal call_count
         call_count += 1
@@ -113,7 +113,7 @@ def test_cache_set_redis_backend(redis_docker):
     get_item(100)
     assert call_count == 1
 
-    cache.cache_set(get_item, {'id': 100, 'data': 'updated_data'}, item_id=100)
+    cachu.cache_set(get_item, {'id': 100, 'data': 'updated_data'}, item_id=100)
 
     result = get_item(100)
     assert result['data'] == 'updated_data'
@@ -127,4 +127,4 @@ def test_cache_set_not_decorated_raises():
         return x * 2
 
     with pytest.raises(ValueError, match='not decorated with @cache'):
-        cache.cache_set(plain_func, 10, x=5)
+        cachu.cache_set(plain_func, 10, x=5)

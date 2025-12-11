@@ -1,5 +1,5 @@
 [project]
-name = "cache"
+name = "cachu"
 version = "0.1.0"
 description = "Flexible caching library built on dogpile.cache"
 readme = "README.md"
@@ -20,7 +20,7 @@ test = [
 ]
 
 [project.urls]
-Repository = "https://github.com/bissli/cache.git"
+Repository = "https://github.com/bissli/cachu.git"
 
 [tool.setuptools.packages.find]
 where = ["src"]

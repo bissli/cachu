@@ -1,7 +1,7 @@
 """Test key generation, tag construction, and filtering logic.
 """
 import pytest
-from cache.keys import _normalize_tag, make_key_generator
+from cachu.keys import _normalize_tag, make_key_generator
 
 
 @pytest.mark.parametrize(('input_tag', 'expected'), [

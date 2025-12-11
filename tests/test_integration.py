@@ -1,6 +1,6 @@
 """Integration tests for cache decorator usage.
 """
-import cache
+import cachu
 
 
 def test_instance_method_caching():
@@ -11,7 +11,7 @@ def test_instance_method_caching():
             self.conn = db_conn
             self.call_count = 0
 
-        @cache.cache(ttl=300, backend='memory')
+        @cachu.cache(ttl=300, backend='memory')
         def get_data(self, user_id: int) -> dict:
             self.call_count += 1
             return {'id': user_id, 'data': 'test'}
@@ -34,7 +34,7 @@ def test_class_method_caching():
         call_count = 0
 
         @classmethod
-        @cache.cache(ttl=300, backend='memory')
+        @cachu.cache(ttl=300, backend='memory')
         def compute(cls, x: int) -> int:
             cls.call_count += 1
             return x * 2
@@ -53,7 +53,7 @@ def test_static_method_caching():
 
     class Utils:
         @staticmethod
-        @cache.cache(ttl=300, backend='memory')
+        @cachu.cache(ttl=300, backend='memory')
         def calculate(x: int) -> int:
             nonlocal call_count
             call_count += 1
@@ -72,13 +72,13 @@ def test_multiple_decorators_same_backend():
     call_count_1 = 0
     call_count_2 = 0
 
-    @cache.cache(ttl=300, backend='memory')
+    @cachu.cache(ttl=300, backend='memory')
     def func1(x: int) -> int:
         nonlocal call_count_1
         call_count_1 += 1
         return x * 2
 
-    @cache.cache(ttl=300, backend='memory')
+    @cachu.cache(ttl=300, backend='memory')
     def func2(x: int) -> int:
         nonlocal call_count_2
         call_count_2 += 1
@@ -96,11 +96,11 @@ def test_multiple_decorators_same_backend():
 def test_tag_isolation():
     """Verify tags properly isolate cached values.
     """
-    @cache.cache(ttl=300, backend='memory', tag='ns1')
+    @cachu.cache(ttl=300, backend='memory', tag='ns1')
     def func_ns1(x: int) -> int:
         return x * 2
 
-    @cache.cache(ttl=300, backend='memory', tag='ns2')
+    @cachu.cache(ttl=300, backend='memory', tag='ns2')
     def func_ns2(x: int) -> int:
         return x * 3
 
@@ -116,7 +116,7 @@ def test_varargs_caching():
     """
     call_count = 0
 
-    @cache.cache(ttl=300, backend='memory')
+    @cachu.cache(ttl=300, backend='memory')
     def func(*args) -> int:
         nonlocal call_count
         call_count += 1
@@ -136,7 +136,7 @@ def test_kwargs_caching():
     """
     call_count = 0
 
-    @cache.cache(ttl=300, backend='memory')
+    @cachu.cache(ttl=300, backend='memory')
     def func(**kwargs) -> dict:
         nonlocal call_count
         call_count += 1
@@ -153,11 +153,11 @@ def test_kwargs_caching():
 def test_mixed_backends(temp_cache_dir):
     """Verify different backends can be used for different functions.
     """
-    @cache.cache(ttl=60, backend='memory')
+    @cachu.cache(ttl=60, backend='memory')
     def memory_func(x: int) -> int:
         return x * 2
 
-    @cache.cache(ttl=300, backend='file')
+    @cachu.cache(ttl=300, backend='file')
     def file_func(x: int) -> int:
         return x * 3
 
@@ -173,7 +173,7 @@ def test_cache_if_callback():
     """
     call_count = 0
 
-    @cache.cache(ttl=300, backend='memory', cache_if=lambda r: r is not None)
+    @cachu.cache(ttl=300, backend='memory', cache_if=lambda r: r is not None)
     def find_item(item_id: int) -> dict | None:
         nonlocal call_count
         call_count += 1
@@ -198,7 +198,7 @@ def test_validate_callback():
     """
     call_count = 0
 
-    @cache.cache(ttl=300, backend='memory', validate=lambda e: e.value.get('version') == 2)
+    @cachu.cache(ttl=300, backend='memory', validate=lambda e: e.value.get('version') == 2)
     def get_config() -> dict:
         nonlocal call_count
         call_count += 1
@@ -218,11 +218,11 @@ def test_validate_callback():
 
 
 def test_skip_cache_kwarg():
-    """Verify _skip_cache kwarg bypasses cache.
+    """Verify _skip_cache kwarg bypasses cachu.
     """
     call_count = 0
 
-    @cache.cache(ttl=300, backend='memory')
+    @cachu.cache(ttl=300, backend='memory')
     def func(x: int) -> int:
         nonlocal call_count
         call_count += 1
@@ -242,11 +242,11 @@ def test_skip_cache_kwarg():
 
 
 def test_overwrite_cache_kwarg():
-    """Verify _overwrite_cache kwarg refreshes cache.
+    """Verify _overwrite_cache kwarg refreshes cachu.
     """
     call_count = 0
 
-    @cache.cache(ttl=300, backend='memory')
+    @cachu.cache(ttl=300, backend='memory')
     def func(x: int) -> int:
         nonlocal call_count
         call_count += 1
@@ -272,7 +272,7 @@ def test_overwrite_cache_kwarg():
 def test_cache_info_statistics():
     """Verify cache_info returns hit/miss statistics.
     """
-    @cache.cache(ttl=300, backend='memory')
+    @cachu.cache(ttl=300, backend='memory')
     def func(x: int) -> int:
         return x * 2
 
@@ -282,6 +282,6 @@ def test_cache_info_statistics():
     func(2)
     func(1)
 
-    info = cache.cache_info(func)
+    info = cachu.cache_info(func)
     assert info.hits == 3
     assert info.misses == 2

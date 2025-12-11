@@ -1,4 +1,4 @@
-# cache
+# cachu
 
 Flexible caching library with support for memory, file, and Redis backends.
 
@@ -7,25 +7,25 @@ Flexible caching library with support for memory, file, and Redis backends.
 **Basic installation:**
 
 ```bash
-pip install git+https://github.com/bissli/cache.git
+pip install git+https://github.com/bissli/cachu.git
 ```
 
 **With Redis support:**
 
 ```bash
-pip install git+https://github.com/bissli/cache.git#egg=cache[redis]
+pip install git+https://github.com/bissli/cachu.git#egg=cachu[redis]
 ```
 
 ## Quick Start
 
 ```python
-import cache
+import cachu
 
 # Configure once at startup
-cache.configure(backend='memory', key_prefix='v1:')
+cachu.configure(backend='memory', key_prefix='v1:')
 
 # Use the @cache decorator
-@cache.cache(ttl=300)
+@cachu.cache(ttl=300)
 def get_user(user_id: int) -> dict:
     return fetch_from_database(user_id)
 
@@ -39,9 +39,9 @@ user = get_user(123)  # Cache hit - returns cached value
 Configure cache settings at application startup:
 
 ```python
-import cache
+import cachu
 
-cache.configure(
+cachu.configure(
     backend='memory',           # Default backend: 'memory', 'file', or 'redis'
     key_prefix='v1:',           # Prefix for all cache keys
     file_dir='/var/cache/app',  # Directory for file cache
@@ -62,16 +62,16 @@ cache.configure(
 
 ### Package Isolation
 
-Each package automatically gets isolated configuration. This prevents conflicts when multiple libraries use the cache package:
+Each package automatically gets isolated configuration. This prevents conflicts when multiple libraries use the cachu package:
 
 ```python
 # In library_a/config.py
-import cache
-cache.configure(key_prefix='lib_a:', redis_url='redis://redis-a:6379/0')
+import cachu
+cachu.configure(key_prefix='lib_a:', redis_url='redis://redis-a:6379/0')
 
 # In library_b/config.py
-import cache
-cache.configure(key_prefix='lib_b:', redis_url='redis://redis-b:6379/0')
+import cachu
+cachu.configure(key_prefix='lib_b:', redis_url='redis://redis-b:6379/0')
 
 # Each library uses its own configuration automatically
 ```
@@ -79,9 +79,9 @@ cache.configure(key_prefix='lib_b:', redis_url='redis://redis-b:6379/0')
 Retrieve configuration:
 
 ```python
-cfg = cache.get_config()                    # Current package's config
-cfg = cache.get_config(package='mylib')     # Specific package's config
-all_configs = cache.get_all_configs()       # All configurations
+cfg = cachu.get_config()                    # Current package's config
+cfg = cachu.get_config(package='mylib')     # Specific package's config
+all_configs = cachu.get_all_configs()       # All configurations
 ```
 
 ## Usage
@@ -89,7 +89,7 @@ all_configs = cache.get_all_configs()       # All configurations
 ### Basic Caching
 
 ```python
-from cache import cache
+from cachu import cachu
 
 @cache(ttl=300, backend='memory')
 def expensive_operation(param: str) -> dict:
@@ -129,7 +129,7 @@ def get_product(product_id: int) -> dict:
     return fetch_product(product_id)
 
 # Clear only user caches
-cache.cache_clear(tag='users', backend='memory', ttl=300)
+cachu.cache_clear(tag='users', backend='memory', ttl=300)
 ```
 
 ### Conditional Caching
@@ -201,7 +201,7 @@ def get_user(user_id: int) -> dict:
     return fetch_user(user_id)
 
 # After some usage
-info = cache.cache_info(get_user)
+info = cachu.cache_info(get_user)
 print(f"Hits: {info.hits}, Misses: {info.misses}, Size: {info.currsize}")
 ```
 
@@ -230,7 +230,7 @@ process_data(logger2, ctx2, 123, 'test')  # Cache hit
 ### Direct Cache Manipulation
 
 ```python
-from cache import cache_get, cache_set, cache_delete, cache_clear
+from cachu import cache_get, cache_set, cache_delete, cache_clear
 
 @cache(ttl=300, tag='users')
 def get_user(user_id: int) -> dict:
@@ -249,7 +249,7 @@ cache_delete(get_user, user_id=123)
 ### Clearing Caches
 
 ```python
-from cache import cache_clear
+from cachu import cachu_clear
 
 # Clear specific region
 cache_clear(backend='memory', ttl=300)
@@ -284,7 +284,7 @@ def get_data(id: int) -> dict:
     return fetch(id)
 
 # In tests/conftest.py
-cache.cache_clear(backend='memory', ttl=300, package='myapp')
+cachu.cache_clear(backend='memory', ttl=300, package='myapp')
 ```
 
 ## Instance and Class Methods
@@ -314,17 +314,17 @@ class UserRepository:
 Disable caching globally for tests:
 
 ```python
-import cache
+import cachu
 import pytest
 
 @pytest.fixture(autouse=True)
 def disable_caching():
-    cache.disable()
+    cachu.disable()
     yield
-    cache.enable()
+    cachu.enable()
 
 # Check state
-if cache.is_disabled():
+if cachu.is_disabled():
     print("Caching is disabled")
 ```
 
@@ -333,7 +333,7 @@ if cache.is_disabled():
 ### Direct Backend Access
 
 ```python
-from cache import get_backend
+from cachu import get_backend
 
 backend = get_backend('memory', ttl=300)
 backend.set('my_key', {'data': 'value'}, ttl=300)
@@ -344,7 +344,7 @@ backend.delete('my_key')
 ### Redis Client Access
 
 ```python
-from cache import get_redis_client
+from cachu import get_redis_client
 
 client = get_redis_client()
 client.set('direct_key', 'value')
@@ -353,7 +353,7 @@ client.set('direct_key', 'value')
 ## Public API
 
 ```python
-from cache import (
+from cachu import (
     # Configuration
     configure,
     get_config,

@@ -1,13 +1,13 @@
 """Test cache configuration.
 """
-import cache
+import cachu
 import pytest
 
 
 def test_default_configuration():
     """Verify default configuration values are set correctly.
     """
-    from cache.config import CacheConfig
+    from cachu.config import CacheConfig
     default_config = CacheConfig()
     assert default_config.backend == 'memory'
     assert default_config.key_prefix == ''
@@ -18,8 +18,8 @@ def test_default_configuration():
 def test_configure_updates_settings(tmp_path):
     """Verify configure() updates global configuration.
     """
-    cache.configure(key_prefix='v2:', file_dir=str(tmp_path))
-    cfg = cache.get_config()
+    cachu.configure(key_prefix='v2:', file_dir=str(tmp_path))
+    cfg = cachu.get_config()
     assert cfg.key_prefix == 'v2:'
     assert cfg.file_dir == str(tmp_path)
 
@@ -27,11 +27,11 @@ def test_configure_updates_settings(tmp_path):
 def test_configure_redis_settings():
     """Verify Redis-specific configuration can be updated.
     """
-    cache.configure(
+    cachu.configure(
         redis_url='redis://redis.example.com:6380/1',
         redis_distributed=True,
     )
-    cfg = cache.get_config()
+    cfg = cachu.get_config()
     assert cfg.redis_url == 'redis://redis.example.com:6380/1'
     assert cfg.redis_distributed is True
 
@@ -39,8 +39,8 @@ def test_configure_redis_settings():
 def test_configure_backend_setting():
     """Verify default backend can be changed.
     """
-    cache.configure(backend='file')
-    cfg = cache.get_config()
+    cachu.configure(backend='file')
+    cfg = cachu.get_config()
     assert cfg.backend == 'file'
 
 
@@ -48,11 +48,11 @@ def test_configure_invalid_backend_raises():
     """Verify invalid backend raises ValueError.
     """
     with pytest.raises(ValueError, match='backend must be one of'):
-        cache.configure(backend='invalid')
+        cachu.configure(backend='invalid')
 
 
 def test_configure_invalid_file_dir_raises(tmp_path):
     """Verify invalid file_dir raises ValueError.
     """
     with pytest.raises(ValueError, match='file_dir must be an existing directory'):
-        cache.configure(file_dir='/nonexistent/path')
+        cachu.configure(file_dir='/nonexistent/path')

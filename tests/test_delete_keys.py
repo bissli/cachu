@@ -1,6 +1,6 @@
 """Test cache_delete functionality for deleting specific cache keys.
 """
-import cache
+import cachu
 import pytest
 
 
@@ -9,7 +9,7 @@ def test_cache_delete_basic():
     """
     call_count = 0
 
-    @cache.cache(ttl=300, backend='memory', tag='users')
+    @cachu.cache(ttl=300, backend='memory', tag='users')
     def get_user(user_id: int) -> dict:
         nonlocal call_count
         call_count += 1
@@ -23,7 +23,7 @@ def test_cache_delete_basic():
     result4 = get_user(456)
     assert call_count == 2
 
-    cache.cache_delete(get_user, user_id=123)
+    cachu.cache_delete(get_user, user_id=123)
 
     result5 = get_user(123)
     assert call_count == 3
@@ -37,7 +37,7 @@ def test_cache_delete_with_multiple_params():
     """
     call_count = 0
 
-    @cache.cache(ttl=300, backend='memory', tag='data')
+    @cachu.cache(ttl=300, backend='memory', tag='data')
     def get_data(user_id: int, key: str) -> dict:
         nonlocal call_count
         call_count += 1
@@ -53,7 +53,7 @@ def test_cache_delete_with_multiple_params():
     get_data(456, 'profile')
     assert call_count == 3
 
-    cache.cache_delete(get_data, user_id=123, key='profile')
+    cachu.cache_delete(get_data, user_id=123, key='profile')
 
     get_data(123, 'profile')
     assert call_count == 4
@@ -68,7 +68,7 @@ def test_cache_delete_with_defaults():
     """
     call_count = 0
 
-    @cache.cache(ttl=300, backend='memory', tag='api')
+    @cachu.cache(ttl=300, backend='memory', tag='api')
     def fetch_data(resource: str, latest: bool = False) -> dict:
         nonlocal call_count
         call_count += 1
@@ -79,7 +79,7 @@ def test_cache_delete_with_defaults():
     fetch_data('users')
     assert call_count == 2
 
-    cache.cache_delete(fetch_data, resource='users', latest=True)
+    cachu.cache_delete(fetch_data, resource='users', latest=True)
 
     fetch_data('users', latest=True)
     assert call_count == 3
@@ -94,7 +94,7 @@ def test_cache_delete_file_backend(temp_cache_dir):
     """
     call_count = 0
 
-    @cache.cache(ttl=300, backend='file', tag='items')
+    @cachu.cache(ttl=300, backend='file', tag='items')
     def get_item(item_id: int) -> dict:
         nonlocal call_count
         call_count += 1
@@ -108,7 +108,7 @@ def test_cache_delete_file_backend(temp_cache_dir):
     get_item(200)
     assert call_count == 2
 
-    cache.cache_delete(get_item, item_id=100)
+    cachu.cache_delete(get_item, item_id=100)
 
     get_item(100)
     assert call_count == 3
@@ -123,7 +123,7 @@ def test_cache_delete_redis_backend(redis_docker):
     """
     call_count = 0
 
-    @cache.cache(ttl=300, backend='redis', tag='items')
+    @cachu.cache(ttl=300, backend='redis', tag='items')
     def get_item(item_id: int) -> dict:
         nonlocal call_count
         call_count += 1
@@ -137,7 +137,7 @@ def test_cache_delete_redis_backend(redis_docker):
     get_item(200)
     assert call_count == 2
 
-    cache.cache_delete(get_item, item_id=100)
+    cachu.cache_delete(get_item, item_id=100)
 
     get_item(100)
     assert call_count == 3
@@ -153,4 +153,4 @@ def test_cache_delete_not_decorated_raises():
         return x * 2
 
     with pytest.raises(ValueError, match='not decorated with @cache'):
-        cache.cache_delete(plain_func, x=5)
+        cachu.cache_delete(plain_func, x=5)

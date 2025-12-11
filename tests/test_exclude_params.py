@@ -1,6 +1,6 @@
 """Test exclude parameter functionality for cache decorator.
 """
-import cache
+import cachu
 import pytest
 
 
@@ -9,7 +9,7 @@ def test_exclude_params_basic_memory():
     """
     call_count = 0
 
-    @cache.cache(ttl=300, backend='memory', exclude={'logger', 'context'})
+    @cachu.cache(ttl=300, backend='memory', exclude={'logger', 'context'})
     def process_data(logger, context, user_id: int, data: str) -> dict:
         nonlocal call_count
         call_count += 1
@@ -31,7 +31,7 @@ def test_exclude_params_single_param():
     """
     call_count = 0
 
-    @cache.cache(ttl=300, backend='memory', exclude={'timestamp'})
+    @cachu.cache(ttl=300, backend='memory', exclude={'timestamp'})
     def fetch_data(timestamp: str, user_id: int) -> dict:
         nonlocal call_count
         call_count += 1
@@ -53,7 +53,7 @@ def test_exclude_params_multiple_params():
     """
     call_count = 0
 
-    @cache.cache(ttl=300, backend='memory', exclude={'logger', 'debug', 'verbose'})
+    @cachu.cache(ttl=300, backend='memory', exclude={'logger', 'debug', 'verbose'})
     def complex_func(logger, debug: bool, verbose: bool, user_id: int, action: str) -> dict:
         nonlocal call_count
         call_count += 1
@@ -75,7 +75,7 @@ def test_exclude_params_with_tag():
     """
     call_count = 0
 
-    @cache.cache(ttl=300, backend='memory', tag='users', exclude={'session_id'})
+    @cachu.cache(ttl=300, backend='memory', tag='users', exclude={'session_id'})
     def get_user(session_id: str, user_id: int) -> dict:
         nonlocal call_count
         call_count += 1
@@ -92,7 +92,7 @@ def test_exclude_params_with_defaults():
     """
     call_count = 0
 
-    @cache.cache(ttl=300, backend='memory', exclude={'debug'})
+    @cachu.cache(ttl=300, backend='memory', exclude={'debug'})
     def fetch_data(user_id: int, debug: bool = False) -> dict:
         nonlocal call_count
         call_count += 1
@@ -110,7 +110,7 @@ def test_exclude_params_with_kwargs():
     """
     call_count = 0
 
-    @cache.cache(ttl=300, backend='memory', exclude={'meta'})
+    @cachu.cache(ttl=300, backend='memory', exclude={'meta'})
     def process(user_id: int, data: str, meta: dict = None) -> dict:
         nonlocal call_count
         call_count += 1
@@ -132,7 +132,7 @@ def test_exclude_params_combined_with_connection_filtering():
         def __init__(self):
             self.driver_connection = True
 
-    @cache.cache(ttl=300, backend='memory', exclude={'logger'})
+    @cachu.cache(ttl=300, backend='memory', exclude={'logger'})
     def query_data(conn, logger, user_id: int) -> dict:
         nonlocal call_count
         call_count += 1
@@ -152,7 +152,7 @@ def test_exclude_params_combined_with_underscore_filtering():
     """
     call_count = 0
 
-    @cache.cache(ttl=300, backend='memory', exclude={'debug'})
+    @cachu.cache(ttl=300, backend='memory', exclude={'debug'})
     def process_data(_internal: str, debug: bool, user_id: int) -> dict:
         nonlocal call_count
         call_count += 1
@@ -169,7 +169,7 @@ def test_exclude_params_preserves_included_param_uniqueness():
     """
     call_count = 0
 
-    @cache.cache(ttl=300, backend='memory', exclude={'ignored'})
+    @cachu.cache(ttl=300, backend='memory', exclude={'ignored'})
     def func(ignored: str, x: int, y: int) -> int:
         nonlocal call_count
         call_count += 1
@@ -193,7 +193,7 @@ def test_exclude_params_with_instance_method():
         def __init__(self):
             self.call_count = 0
 
-        @cache.cache(ttl=300, backend='memory', exclude={'logger'})
+        @cachu.cache(ttl=300, backend='memory', exclude={'logger'})
         def get_data(self, logger, user_id: int) -> dict:
             self.call_count += 1
             return {'user_id': user_id}
@@ -212,7 +212,7 @@ def test_exclude_params_with_file_backend(temp_cache_dir):
     """
     call_count = 0
 
-    @cache.cache(ttl=300, backend='file', exclude={'logger'})
+    @cachu.cache(ttl=300, backend='file', exclude={'logger'})
     def func(logger, item_id: int) -> dict:
         nonlocal call_count
         call_count += 1
@@ -235,7 +235,7 @@ def test_exclude_params_with_redis_backend(redis_docker):
     """
     call_count = 0
 
-    @cache.cache(ttl=300, backend='redis', exclude={'logger'})
+    @cachu.cache(ttl=300, backend='redis', exclude={'logger'})
     def func(logger, item_id: int) -> dict:
         nonlocal call_count
         call_count += 1
@@ -257,7 +257,7 @@ def test_exclude_params_use_case_from_requirements():
     """
     call_count = 0
 
-    @cache.cache(ttl=300, backend='memory', exclude={'logger', 'context'})
+    @cachu.cache(ttl=300, backend='memory', exclude={'logger', 'context'})
     def calculate(logger, context, x: int, y: int) -> int:
         nonlocal call_count
         call_count += 1

@@ -23,7 +23,7 @@ site.addsitedir(HERE)
 def _clear_all_backends() -> None:
     """Clear all backend instances (internal test helper).
     """
-    from cache.decorator import _backends, _backends_lock, _stats, _stats_lock
+    from cachu.decorator import _backends, _backends_lock, _stats, _stats_lock
 
     with _backends_lock:
         for backend in _backends.values():
@@ -41,7 +41,7 @@ def _clear_all_backends() -> None:
 def reset_cache_config(request):
     """Reset cache configuration and clear backends before each test.
     """
-    from cache.config import CacheConfig, _registry, enable
+    from cachu.config import CacheConfig, _registry, enable
 
     enable()
     _clear_all_backends()
@@ -96,7 +96,7 @@ def reset_cache_config(request):
 def temp_cache_dir():
     """Provide a temporary directory for file cache tests.
     """
-    from cache.config import _registry
+    from cachu.config import _registry
     temp_dir = tempfile.mkdtemp(prefix='cache_test_')
     _registry._default.file_dir = temp_dir
     yield temp_dir
