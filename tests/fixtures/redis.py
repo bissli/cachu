@@ -35,7 +35,7 @@ def redis_docker():
         redis_test_config.port = port
 
         import cache
-        cache.configure(redis_host=host, redis_port=port)
+        cache.configure(redis_url=f'redis://{host}:{port}/0')
 
         r = redis_lib.Redis(host=host, port=port, db=0)
         r.ping()

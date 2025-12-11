@@ -8,19 +8,19 @@ def test_get_all_configs_returns_default():
     """
     configs = cache.get_all_configs()
     assert '_default' in configs
-    assert 'debug_key' in configs['_default']
-    assert 'memory' in configs['_default']
-    assert 'redis' in configs['_default']
+    assert 'backend' in configs['_default']
+    assert 'key_prefix' in configs['_default']
+    assert 'redis_url' in configs['_default']
 
 
-def test_get_all_configs_includes_namespace_configs():
-    """Verify get_all_configs includes namespace-specific configurations.
+def test_get_all_configs_includes_package_configs():
+    """Verify get_all_configs includes package-specific configurations.
     """
-    cache.configure(debug_key='ns1:', memory='dogpile.cache.memory_pickle')
+    cache.configure(key_prefix='ns1:', backend='memory')
     configs = cache.get_all_configs()
     assert '_default' in configs
-    ns_configs = [k for k in configs if k != '_default']
-    assert len(ns_configs) >= 1
+    pkg_configs = [k for k in configs if k != '_default']
+    assert len(pkg_configs) >= 1
 
 
 def test_disable_prevents_caching():
@@ -28,7 +28,7 @@ def test_disable_prevents_caching():
     """
     call_count = 0
 
-    @cache.memorycache(300).cache_on_arguments()
+    @cache.cache(ttl=300, backend='memory')
     def expensive_fn(x: int) -> int:
         nonlocal call_count
         call_count += 1
@@ -51,7 +51,7 @@ def test_enable_restores_caching():
     """
     call_count = 0
 
-    @cache.memorycache(300).cache_on_arguments()
+    @cache.cache(ttl=300, backend='memory')
     def expensive_fn(x: int) -> int:
         nonlocal call_count
         call_count += 1

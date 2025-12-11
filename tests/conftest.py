@@ -6,7 +6,6 @@ import shutil
 import site
 import tempfile
 
-import cache
 import pytest
 
 try:
@@ -21,45 +20,31 @@ HERE = pathlib.Path(pathlib.Path(__file__).resolve()).parent
 site.addsitedir(HERE)
 
 
-def _clear_all_regions() -> None:
-    """Clear all cache regions (internal test helper).
+def _clear_all_backends() -> None:
+    """Clear all backend instances (internal test helper).
     """
-    import dbm
-    for region in cache.cache._memory_cache_regions.values():
-        try:
-            region.actual_backend._cache.clear()
-        except Exception:
-            pass
-    for region in cache.cache._file_cache_regions.values():
-        try:
-            filename = region.actual_backend.filename
-            with dbm.open(filename, 'n'):
+    from cache.decorator import _backends, _backends_lock, _stats, _stats_lock
+
+    with _backends_lock:
+        for backend in _backends.values():
+            try:
+                backend.clear()
+            except Exception:
                 pass
-        except Exception:
-            pass
-    for region in cache.cache._redis_cache_regions.values():
-        try:
-            client = region.actual_backend.writer_client
-            for key in client.scan_iter(match=f'{region.name}:*'):
-                client.delete(key)
-        except Exception:
-            pass
-    cache.cache._memory_cache_regions.clear()
-    cache.cache._file_cache_regions.clear()
-    cache.cache._redis_cache_regions.clear()
+        _backends.clear()
+
+    with _stats_lock:
+        _stats.clear()
 
 
 @pytest.fixture(autouse=True)
 def reset_cache_config(request):
-    """Reset cache configuration and clear cache regions before each test.
-
-    Since namespace isolation is now enabled, we configure the registry's
-    default config directly so all test namespaces use the test settings.
+    """Reset cache configuration and clear backends before each test.
     """
     from cache.config import CacheConfig, _registry, enable
 
     enable()
-    _clear_all_regions()
+    _clear_all_backends()
     _registry._configs.clear()
 
     is_redis_test = 'redis' in [marker.name for marker in request.node.iter_markers()]
@@ -72,7 +57,8 @@ def reset_cache_config(request):
         is_redis_test = (
             params.get('cache_type') == 'redis' or
             params.get('fixture') == 'redis_docker' or
-            params.get('fixture_needed') == 'redis_docker'
+            params.get('fixture_needed') == 'redis_docker' or
+            params.get('backend_type') == 'redis'
         )
 
     redis_host = 'localhost'
@@ -84,16 +70,12 @@ def reset_cache_config(request):
         redis_port = redis_test_config.port
 
     _registry._default = CacheConfig(
-        debug_key='test:',
-        memory='dogpile.cache.memory_pickle',
-        redis='dogpile.cache.redis' if is_redis_test else 'dogpile.cache.null',
-        tmpdir=tempfile.gettempdir(),
-        redis_host=redis_host,
-        redis_port=redis_port,
-        redis_db=0,
-        redis_ssl=False,
+        backend='memory',
+        key_prefix='test:',
+        file_dir=tempfile.gettempdir(),
+        redis_url=f'redis://{redis_host}:{redis_port}/0',
         redis_distributed=False,
-        default_backend='memory')
+    )
 
     if is_redis_test:
         try:
@@ -102,8 +84,10 @@ def reset_cache_config(request):
             r.close()
         except Exception:
             pass
+
     yield
-    _clear_all_regions()
+
+    _clear_all_backends()
     _registry._configs.clear()
     _registry._default = CacheConfig()
 
@@ -114,54 +98,9 @@ def temp_cache_dir():
     """
     from cache.config import _registry
     temp_dir = tempfile.mkdtemp(prefix='cache_test_')
-    _registry._default.tmpdir = temp_dir
+    _registry._default.file_dir = temp_dir
     yield temp_dir
     shutil.rmtree(temp_dir, ignore_errors=True)
-
-
-def get_memory_region(seconds: int):
-    """Get memory cache region by seconds (finds first matching region).
-    """
-    for (ns, secs), region in cache.cache._memory_cache_regions.items():
-        if secs == seconds:
-            return region
-    return None
-
-
-def get_file_region(seconds: int):
-    """Get file cache region by seconds (finds first matching region).
-    """
-    for (ns, secs), region in cache.cache._file_cache_regions.items():
-        if secs == seconds:
-            return region
-    return None
-
-
-def get_redis_region(seconds: int):
-    """Get redis cache region by seconds (finds first matching region).
-    """
-    for (ns, secs), region in cache.cache._redis_cache_regions.items():
-        if secs == seconds:
-            return region
-    return None
-
-
-def has_memory_region(seconds: int) -> bool:
-    """Check if a memory cache region exists for given seconds.
-    """
-    return any(secs == seconds for (ns, secs) in cache.cache._memory_cache_regions)
-
-
-def has_file_region(seconds: int) -> bool:
-    """Check if a file cache region exists for given seconds.
-    """
-    return any(secs == seconds for (ns, secs) in cache.cache._file_cache_regions)
-
-
-def has_redis_region(seconds: int) -> bool:
-    """Check if a redis cache region exists for given seconds.
-    """
-    return any(secs == seconds for (ns, secs) in cache.cache._redis_cache_regions)
 
 
 @pytest.fixture
@@ -175,4 +114,4 @@ def sample_function():
 
 pytest_plugins = [
     'fixtures.redis',
-    ]
+]

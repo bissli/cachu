@@ -11,7 +11,7 @@ def test_instance_method_caching():
             self.conn = db_conn
             self.call_count = 0
 
-        @cache.memorycache(seconds=300).cache_on_arguments()
+        @cache.cache(ttl=300, backend='memory')
         def get_data(self, user_id: int) -> dict:
             self.call_count += 1
             return {'id': user_id, 'data': 'test'}
@@ -34,7 +34,7 @@ def test_class_method_caching():
         call_count = 0
 
         @classmethod
-        @cache.memorycache(seconds=300).cache_on_arguments()
+        @cache.cache(ttl=300, backend='memory')
         def compute(cls, x: int) -> int:
             cls.call_count += 1
             return x * 2
@@ -53,7 +53,7 @@ def test_static_method_caching():
 
     class Utils:
         @staticmethod
-        @cache.memorycache(seconds=300).cache_on_arguments()
+        @cache.cache(ttl=300, backend='memory')
         def calculate(x: int) -> int:
             nonlocal call_count
             call_count += 1
@@ -66,19 +66,19 @@ def test_static_method_caching():
     assert call_count == 1
 
 
-def test_multiple_decorators_same_region():
-    """Verify multiple functions can share same cache region.
+def test_multiple_decorators_same_backend():
+    """Verify multiple functions can share same cache backend.
     """
     call_count_1 = 0
     call_count_2 = 0
 
-    @cache.memorycache(seconds=300).cache_on_arguments()
+    @cache.cache(ttl=300, backend='memory')
     def func1(x: int) -> int:
         nonlocal call_count_1
         call_count_1 += 1
         return x * 2
 
-    @cache.memorycache(seconds=300).cache_on_arguments()
+    @cache.cache(ttl=300, backend='memory')
     def func2(x: int) -> int:
         nonlocal call_count_2
         call_count_2 += 1
@@ -93,14 +93,14 @@ def test_multiple_decorators_same_region():
     assert call_count_2 == 1
 
 
-def test_namespace_isolation():
-    """Verify namespaces properly isolate cached values.
+def test_tag_isolation():
+    """Verify tags properly isolate cached values.
     """
-    @cache.memorycache(seconds=300).cache_on_arguments(namespace='ns1')
+    @cache.cache(ttl=300, backend='memory', tag='ns1')
     def func_ns1(x: int) -> int:
         return x * 2
 
-    @cache.memorycache(seconds=300).cache_on_arguments(namespace='ns2')
+    @cache.cache(ttl=300, backend='memory', tag='ns2')
     def func_ns2(x: int) -> int:
         return x * 3
 
@@ -116,7 +116,7 @@ def test_varargs_caching():
     """
     call_count = 0
 
-    @cache.memorycache(seconds=300).cache_on_arguments()
+    @cache.cache(ttl=300, backend='memory')
     def func(*args) -> int:
         nonlocal call_count
         call_count += 1
@@ -136,7 +136,7 @@ def test_kwargs_caching():
     """
     call_count = 0
 
-    @cache.memorycache(seconds=300).cache_on_arguments()
+    @cache.cache(ttl=300, backend='memory')
     def func(**kwargs) -> dict:
         nonlocal call_count
         call_count += 1
@@ -150,14 +150,14 @@ def test_kwargs_caching():
     assert call_count == 1
 
 
-def test_mixed_backends():
+def test_mixed_backends(temp_cache_dir):
     """Verify different backends can be used for different functions.
     """
-    @cache.memorycache(seconds=60).cache_on_arguments()
+    @cache.cache(ttl=60, backend='memory')
     def memory_func(x: int) -> int:
         return x * 2
 
-    @cache.filecache(seconds=300).cache_on_arguments()
+    @cache.cache(ttl=300, backend='file')
     def file_func(x: int) -> int:
         return x * 3
 
@@ -167,6 +167,121 @@ def test_mixed_backends():
     assert result1 == 10
     assert result2 == 15
 
-    from conftest import has_file_region, has_memory_region
-    assert has_memory_region(60)
-    assert has_file_region(300)
+
+def test_cache_if_callback():
+    """Verify cache_if callback controls caching.
+    """
+    call_count = 0
+
+    @cache.cache(ttl=300, backend='memory', cache_if=lambda r: r is not None)
+    def find_item(item_id: int) -> dict | None:
+        nonlocal call_count
+        call_count += 1
+        if item_id > 0:
+            return {'id': item_id}
+        return None
+
+    result1 = find_item(1)
+    result2 = find_item(1)
+    assert result1 == {'id': 1}
+    assert call_count == 1
+
+    result3 = find_item(-1)
+    result4 = find_item(-1)
+    assert result3 is None
+    assert result4 is None
+    assert call_count == 3
+
+
+def test_validate_callback():
+    """Verify validate callback controls cache validity.
+    """
+    call_count = 0
+
+    @cache.cache(ttl=300, backend='memory', validate=lambda e: e.value.get('version') == 2)
+    def get_config() -> dict:
+        nonlocal call_count
+        call_count += 1
+        return {'version': call_count, 'data': 'test'}
+
+    result1 = get_config()
+    assert result1 == {'version': 1, 'data': 'test'}
+    assert call_count == 1
+
+    result2 = get_config()
+    assert result2 == {'version': 2, 'data': 'test'}
+    assert call_count == 2
+
+    result3 = get_config()
+    assert result3 == {'version': 2, 'data': 'test'}
+    assert call_count == 2
+
+
+def test_skip_cache_kwarg():
+    """Verify _skip_cache kwarg bypasses cache.
+    """
+    call_count = 0
+
+    @cache.cache(ttl=300, backend='memory')
+    def func(x: int) -> int:
+        nonlocal call_count
+        call_count += 1
+        return x * 2
+
+    result1 = func(5)
+    assert call_count == 1
+
+    result2 = func(5)
+    assert call_count == 1
+
+    result3 = func(5, _skip_cache=True)
+    assert call_count == 2
+
+    result4 = func(5)
+    assert call_count == 2
+
+
+def test_overwrite_cache_kwarg():
+    """Verify _overwrite_cache kwarg refreshes cache.
+    """
+    call_count = 0
+
+    @cache.cache(ttl=300, backend='memory')
+    def func(x: int) -> int:
+        nonlocal call_count
+        call_count += 1
+        return x * call_count
+
+    result1 = func(5)
+    assert result1 == 5
+    assert call_count == 1
+
+    result2 = func(5)
+    assert result2 == 5
+    assert call_count == 1
+
+    result3 = func(5, _overwrite_cache=True)
+    assert result3 == 10
+    assert call_count == 2
+
+    result4 = func(5)
+    assert result4 == 10
+    assert call_count == 2
+
+
+def test_cache_info_statistics():
+    """Verify cache_info returns hit/miss statistics.
+    """
+    @cache.cache(ttl=300, backend='memory')
+    def func(x: int) -> int:
+        return x * 2
+
+    func(1)
+    func(1)
+    func(2)
+    func(2)
+    func(1)
+
+    info = cache.cache_info(func)
+    assert info.hits == 3
+    assert info.misses == 2

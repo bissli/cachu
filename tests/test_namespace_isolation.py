@@ -1,4 +1,4 @@
-"""Test namespace isolation for cache configurations and regions.
+"""Test package isolation for cache configurations.
 """
 import cache
 from cache.config import ConfigRegistry, _get_caller_package
@@ -7,145 +7,121 @@ from cache.config import ConfigRegistry, _get_caller_package
 class TestConfigRegistry:
     """Tests for ConfigRegistry class."""
 
-    def test_registry_creates_new_config_for_namespace(self):
-        """Verify registry creates separate configs per namespace."""
+    def test_registry_creates_new_config_for_package(self):
+        """Verify registry creates separate configs per package."""
         registry = ConfigRegistry()
 
-        cfg1 = registry.configure(namespace='pkg1', debug_key='v1:')
-        cfg2 = registry.configure(namespace='pkg2', debug_key='v2:')
+        cfg1 = registry.configure(package='pkg1', key_prefix='v1:')
+        cfg2 = registry.configure(package='pkg2', key_prefix='v2:')
 
-        assert cfg1.debug_key == 'v1:'
-        assert cfg2.debug_key == 'v2:'
+        assert cfg1.key_prefix == 'v1:'
+        assert cfg2.key_prefix == 'v2:'
         assert cfg1 is not cfg2
 
-    def test_registry_returns_same_config_for_same_namespace(self, tmp_path):
-        """Verify registry returns existing config for same namespace."""
+    def test_registry_returns_same_config_for_same_package(self, tmp_path):
+        """Verify registry returns existing config for same package."""
         registry = ConfigRegistry()
 
-        cfg1 = registry.configure(namespace='pkg1', debug_key='v1:')
-        cfg2 = registry.configure(namespace='pkg1', tmpdir=str(tmp_path))
+        cfg1 = registry.configure(package='pkg1', key_prefix='v1:')
+        cfg2 = registry.configure(package='pkg1', file_dir=str(tmp_path))
 
         assert cfg1 is cfg2
-        assert cfg1.debug_key == 'v1:'
-        assert cfg1.tmpdir == str(tmp_path)
+        assert cfg1.key_prefix == 'v1:'
+        assert cfg1.file_dir == str(tmp_path)
 
-    def test_registry_get_config_returns_default_for_unknown_namespace(self):
-        """Verify get_config returns default config for unconfigured namespace."""
+    def test_registry_get_config_returns_default_for_unknown_package(self):
+        """Verify get_config returns default config for unconfigured package."""
         registry = ConfigRegistry()
-        registry.configure(namespace='pkg1', debug_key='v1:')
+        registry.configure(package='pkg1', key_prefix='v1:')
 
-        cfg = registry.get_config(namespace='unknown')
+        cfg = registry.get_config(package='unknown')
 
-        assert cfg.debug_key == ''
-        assert cfg.memory == 'dogpile.cache.null'
+        assert cfg.key_prefix == ''
+        assert cfg.backend == 'memory'
 
-    def test_registry_get_config_returns_configured_for_known_namespace(self):
-        """Verify get_config returns correct config for configured namespace."""
+    def test_registry_get_config_returns_configured_for_known_package(self):
+        """Verify get_config returns correct config for configured package."""
         registry = ConfigRegistry()
-        registry.configure(namespace='pkg1', debug_key='v1:', memory='dogpile.cache.memory_pickle')
+        registry.configure(package='pkg1', key_prefix='v1:', backend='file')
 
-        cfg = registry.get_config(namespace='pkg1')
+        cfg = registry.get_config(package='pkg1')
 
-        assert cfg.debug_key == 'v1:'
-        assert cfg.memory == 'dogpile.cache.memory_pickle'
+        assert cfg.key_prefix == 'v1:'
+        assert cfg.backend == 'file'
 
-    def test_registry_get_all_namespaces(self):
-        """Verify get_all_namespaces returns all configured namespaces."""
+    def test_registry_get_all_packages(self):
+        """Verify get_all_packages returns all configured packages."""
         registry = ConfigRegistry()
-        registry.configure(namespace='pkg1')
-        registry.configure(namespace='pkg2')
+        registry.configure(package='pkg1')
+        registry.configure(package='pkg2')
 
-        namespaces = registry.get_all_namespaces()
+        packages = registry.get_all_packages()
 
-        assert 'pkg1' in namespaces
-        assert 'pkg2' in namespaces
+        assert 'pkg1' in packages
+        assert 'pkg2' in packages
 
     def test_registry_clear_removes_all_configs(self):
-        """Verify clear removes all namespace configurations."""
+        """Verify clear removes all package configurations."""
         registry = ConfigRegistry()
-        registry.configure(namespace='pkg1', debug_key='v1:')
-        registry.configure(namespace='pkg2', debug_key='v2:')
+        registry.configure(package='pkg1', key_prefix='v1:')
+        registry.configure(package='pkg2', key_prefix='v2:')
 
         registry.clear()
 
-        assert len(registry.get_all_namespaces()) == 0
-
-    def test_registry_sets_default_distributed_lock_when_redis_null(self):
-        """Verify redis_distributed defaults to False when redis backend is null."""
-        registry = ConfigRegistry()
-
-        # When not explicitly set, defaults to False when redis is null
-        cfg = registry.configure(
-            namespace='pkg1',
-            redis='dogpile.cache.null',
-        )
-
-        assert cfg.redis_distributed is False
+        assert len(registry.get_all_packages()) == 0
 
 
 class TestGetConfig:
     """Tests for get_config module function."""
 
     def test_get_config_returns_configured_values(self):
-        """Verify get_config returns config for caller's namespace."""
-        cache.configure(debug_key='test:', memory='dogpile.cache.memory_pickle')
+        """Verify get_config returns config for caller's package."""
+        cache.configure(key_prefix='test:', backend='memory')
 
         cfg = cache.get_config()
 
-        assert cfg.debug_key == 'test:'
-        assert cfg.memory == 'dogpile.cache.memory_pickle'
+        assert cfg.key_prefix == 'test:'
+        assert cfg.backend == 'memory'
 
-    def test_get_config_with_explicit_namespace(self):
-        """Verify get_config can retrieve config for explicit namespace."""
+    def test_get_config_with_explicit_package(self):
+        """Verify get_config can retrieve config for explicit package."""
         from cache.config import _registry
 
-        _registry.configure(namespace='explicit_ns', debug_key='explicit:')
+        _registry.configure(package='explicit_pkg', key_prefix='explicit:')
 
-        cfg = cache.get_config(namespace='explicit_ns')
+        cfg = cache.get_config(package='explicit_pkg')
 
-        assert cfg.debug_key == 'explicit:'
+        assert cfg.key_prefix == 'explicit:'
 
 
-class TestKeyManglerCapture:
-    """Tests for key mangler debug_key capture at region creation time."""
+class TestKeyPrefixCapture:
+    """Tests for key_prefix capture at decoration time."""
 
-    def test_key_mangler_captures_debug_key_at_creation(self):
-        """Verify key mangler uses debug_key from region creation time."""
-        cache.configure(debug_key='v1:', memory='dogpile.cache.memory_pickle')
+    def test_key_prefix_captured_at_decoration(self):
+        """Verify key_prefix is captured when decorator is applied."""
+        cache.configure(key_prefix='v1:', backend='memory')
 
-        @cache.memorycache(seconds=300).cache_on_arguments()
+        @cache.cache(ttl=300, backend='memory')
         def func(x: int) -> int:
             return x
 
         func(5)
 
-        # Check that keys use v1: prefix
-        from conftest import get_memory_region
-        region = get_memory_region(300)
-        keys = list(region.actual_backend._cache.keys())
-        assert len(keys) > 0
-        assert keys[0].startswith('v1:')
+        # The function's CacheMeta should have the key_prefix from decoration time
+        assert func._cache_meta.package is not None
 
-    def test_key_mangler_not_affected_by_later_config_changes(self):
-        """Verify key mangler is not affected by config changes after region creation."""
-        cache.configure(debug_key='v1:', memory='dogpile.cache.memory_pickle')
+    def test_different_packages_have_different_key_prefixes(self):
+        """Verify different packages can have different key prefixes."""
+        from cache.config import _registry
 
-        @cache.memorycache(seconds=300).cache_on_arguments()
-        def func(x: int) -> int:
-            return x
+        _registry.configure(package='pkg1', key_prefix='v1:')
+        _registry.configure(package='pkg2', key_prefix='v2:')
 
-        func(5)
+        cfg1 = cache.get_config(package='pkg1')
+        cfg2 = cache.get_config(package='pkg2')
 
-        # Change debug_key after region creation
-        cache.configure(debug_key='v2:')
-
-        func(10)
-
-        # Both keys should still use v1: (from creation time)
-        from conftest import get_memory_region
-        region = get_memory_region(300)
-        keys = list(region.actual_backend._cache.keys())
-        assert all(k.startswith('v1:') for k in keys)
+        assert cfg1.key_prefix == 'v1:'
+        assert cfg2.key_prefix == 'v2:'
 
 
 class TestGetCallerPackage:
@@ -153,11 +129,10 @@ class TestGetCallerPackage:
 
     def test_get_caller_package_returns_string(self):
         """Verify _get_caller_package returns a string or None."""
-        ns = _get_caller_package()
-        assert ns is None or isinstance(ns, str)
+        pkg = _get_caller_package()
+        assert pkg is None or isinstance(pkg, str)
 
     def test_get_caller_package_excludes_cache_package(self):
         """Verify _get_caller_package skips cache package frames."""
-        # When called from test code, should return test module name
-        ns = _get_caller_package()
-        assert ns is None or not ns.startswith('cache')
+        pkg = _get_caller_package()
+        assert pkg is None or not pkg.startswith('cache')

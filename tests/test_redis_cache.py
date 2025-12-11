@@ -11,7 +11,7 @@ def test_redis_cache_basic_decoration(redis_docker):
     """
     call_count = 0
 
-    @cache.rediscache(seconds=300).cache_on_arguments()
+    @cache.cache(ttl=300, backend='redis')
     def expensive_func(x: int) -> int:
         nonlocal call_count
         call_count += 1
@@ -25,30 +25,27 @@ def test_redis_cache_basic_decoration(redis_docker):
     assert call_count == 1
 
 
-@pytest.mark.parametrize(('seconds', 'expected_name'), [
-    (30, '30s'),
-    (120, '2m'),
-    (7200, '2h'),
-    (172800, '2d'),
-])
-def test_redis_cache_naming_convention(redis_docker, seconds, expected_name):
-    """Verify Redis cache uses correct naming convention for regions.
+def test_redis_cache_different_args(redis_docker):
+    """Verify Redis cache distinguishes between different arguments.
     """
-    @cache.rediscache(seconds=seconds).cache_on_arguments()
+    call_count = 0
+
+    @cache.cache(ttl=300, backend='redis')
     def func(x: int) -> int:
-        return x
+        nonlocal call_count
+        call_count += 1
+        return x * 2
 
-    func(1)
+    func(5)
+    func(10)
 
-    from conftest import get_redis_region
-    region = get_redis_region(seconds)
-    assert region.name == expected_name
+    assert call_count == 2
 
 
-def test_redis_cache_with_namespace(redis_docker):
-    """Verify Redis cache namespace parameter is accepted.
+def test_redis_cache_with_tag(redis_docker):
+    """Verify Redis cache tag parameter is accepted.
     """
-    @cache.rediscache(seconds=300).cache_on_arguments(namespace='users')
+    @cache.cache(ttl=300, backend='redis', tag='users')
     def get_user(user_id: int) -> dict:
         return {'id': user_id, 'name': 'test'}
 
@@ -56,18 +53,37 @@ def test_redis_cache_with_namespace(redis_docker):
     assert result['id'] == 123
 
 
-def test_redis_cache_distributed_lock_configuration(redis_docker):
-    """Verify Redis cache respects distributed lock configuration.
+def test_redis_cache_with_kwargs(redis_docker):
+    """Verify Redis cache handles keyword arguments correctly.
     """
-    cache.configure(redis_distributed=True)
+    call_count = 0
 
-    @cache.rediscache(seconds=300).cache_on_arguments()
-    def func(x: int) -> int:
-        return x * 2
+    @cache.cache(ttl=300, backend='redis')
+    def func(x: int, y: int = 10) -> int:
+        nonlocal call_count
+        call_count += 1
+        return x + y
 
-    func(5)
+    result1 = func(5, y=10)
+    result2 = func(5, 10)
+    result3 = func(x=5, y=10)
 
-    from conftest import get_redis_region
-    region = get_redis_region(300)
-    assert hasattr(region.backend, 'distributed_lock')
-    assert region.backend.distributed_lock is True
+    assert result1 == result2 == result3 == 15
+    assert call_count == 1
+
+
+def test_redis_cache_complex_objects(redis_docker):
+    """Verify Redis cache can store complex objects.
+    """
+    @cache.cache(ttl=300, backend='redis')
+    def get_data() -> dict:
+        return {
+            'users': [{'id': 1, 'name': 'Alice'}, {'id': 2, 'name': 'Bob'}],
+            'metadata': {'version': '1.0', 'count': 2},
+        }
+
+    result1 = get_data()
+    result2 = get_data()
+
+    assert result1 == result2
+    assert len(result1['users']) == 2

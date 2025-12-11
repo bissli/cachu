@@ -1,15 +1,15 @@
-"""Test deleting specific cache keys by parameters.
+"""Test cache_delete functionality for deleting specific cache keys.
 """
 import cache
 import pytest
 
 
-def test_delete_memorycache_key_basic():
-    """Verify deleting a specific memory cache key removes only that entry.
+def test_cache_delete_basic():
+    """Verify cache_delete removes only the specified entry.
     """
     call_count = 0
 
-    @cache.memorycache(seconds=300).cache_on_arguments(namespace='users')
+    @cache.cache(ttl=300, backend='memory', tag='users')
     def get_user(user_id: int) -> dict:
         nonlocal call_count
         call_count += 1
@@ -23,7 +23,7 @@ def test_delete_memorycache_key_basic():
     result4 = get_user(456)
     assert call_count == 2
 
-    cache.delete_memorycache_key(300, 'users', get_user, user_id=123)
+    cache.cache_delete(get_user, user_id=123)
 
     result5 = get_user(123)
     assert call_count == 3
@@ -32,12 +32,12 @@ def test_delete_memorycache_key_basic():
     assert call_count == 3
 
 
-def test_delete_memorycache_key_with_multiple_params():
-    """Verify deleting cache key with multiple parameters.
+def test_cache_delete_with_multiple_params():
+    """Verify cache_delete with multiple parameters.
     """
     call_count = 0
 
-    @cache.memorycache(seconds=300).cache_on_arguments(namespace='data')
+    @cache.cache(ttl=300, backend='memory', tag='data')
     def get_data(user_id: int, key: str) -> dict:
         nonlocal call_count
         call_count += 1
@@ -53,7 +53,7 @@ def test_delete_memorycache_key_with_multiple_params():
     get_data(456, 'profile')
     assert call_count == 3
 
-    cache.delete_memorycache_key(300, 'data', get_data, user_id=123, key='profile')
+    cache.cache_delete(get_data, user_id=123, key='profile')
 
     get_data(123, 'profile')
     assert call_count == 4
@@ -63,12 +63,12 @@ def test_delete_memorycache_key_with_multiple_params():
     assert call_count == 4
 
 
-def test_delete_memorycache_key_with_defaults():
-    """Verify deleting cache key works with default parameter values.
+def test_cache_delete_with_defaults():
+    """Verify cache_delete works with default parameter values.
     """
     call_count = 0
 
-    @cache.memorycache(seconds=300).cache_on_arguments(namespace='api')
+    @cache.cache(ttl=300, backend='memory', tag='api')
     def fetch_data(resource: str, latest: bool = False) -> dict:
         nonlocal call_count
         call_count += 1
@@ -79,7 +79,7 @@ def test_delete_memorycache_key_with_defaults():
     fetch_data('users')
     assert call_count == 2
 
-    cache.delete_memorycache_key(300, 'api', fetch_data, resource='users', latest=True)
+    cache.cache_delete(fetch_data, resource='users', latest=True)
 
     fetch_data('users', latest=True)
     assert call_count == 3
@@ -89,21 +89,12 @@ def test_delete_memorycache_key_with_defaults():
     assert call_count == 3
 
 
-@pytest.mark.parametrize(('cache_type', 'delete_func', 'fixture'), [
-    ('file', cache.delete_filecache_key, 'temp_cache_dir'),
-    ('redis', cache.delete_rediscache_key, 'redis_docker'),
-])
-def test_delete_cache_key_basic(cache_type, delete_func, fixture, request):
-    """Verify deleting a specific cache key removes only that entry.
+def test_cache_delete_file_backend(temp_cache_dir):
+    """Verify cache_delete works with file backend.
     """
-    if cache_type == 'redis':
-        pytest.importorskip('redis')
-    request.getfixturevalue(fixture)
-
     call_count = 0
-    cache_func = cache.filecache if cache_type == 'file' else cache.rediscache
 
-    @cache_func(seconds=300).cache_on_arguments(namespace='items')
+    @cache.cache(ttl=300, backend='file', tag='items')
     def get_item(item_id: int) -> dict:
         nonlocal call_count
         call_count += 1
@@ -117,7 +108,7 @@ def test_delete_cache_key_basic(cache_type, delete_func, fixture, request):
     get_item(200)
     assert call_count == 2
 
-    delete_func(300, 'items', get_item, item_id=100)
+    cache.cache_delete(get_item, item_id=100)
 
     get_item(100)
     assert call_count == 3
@@ -126,78 +117,40 @@ def test_delete_cache_key_basic(cache_type, delete_func, fixture, request):
     assert call_count == 3
 
 
-@pytest.mark.parametrize(('cache_type', 'delete_func', 'fixture'), [
-    ('file', cache.delete_filecache_key, 'temp_cache_dir'),
-    ('redis', cache.delete_rediscache_key, 'redis_docker'),
-])
-def test_delete_cache_key_multiple_params(cache_type, delete_func, fixture, request):
-    """Verify deleting cache key with multiple parameters.
-    """
-    if cache_type == 'redis':
-        pytest.importorskip('redis')
-    request.getfixturevalue(fixture)
-
-    call_count = 0
-    cache_func = cache.filecache if cache_type == 'file' else cache.rediscache
-
-    @cache_func(seconds=300).cache_on_arguments(namespace='data')
-    def get_data(user_id: int, metric: str, period: str) -> dict:
-        nonlocal call_count
-        call_count += 1
-        return {'user_id': user_id, 'metric': metric, 'period': period}
-
-    get_data(123, 'views', 'daily')
-    get_data(123, 'views', 'weekly')
-    get_data(456, 'views', 'daily')
-    assert call_count == 3
-
-    delete_func(300, 'data', get_data, user_id=123, metric='views', period='daily')
-
-    get_data(123, 'views', 'daily')
-    assert call_count == 4
-
-    get_data(123, 'views', 'weekly')
-    get_data(456, 'views', 'daily')
-    assert call_count == 4
-
-
 @pytest.mark.redis
-def test_delete_rediscache_key_use_case(redis_docker):
-    """Verify the original use case from the requirements works correctly.
+def test_cache_delete_redis_backend(redis_docker):
+    """Verify cache_delete works with Redis backend.
     """
     call_count = 0
 
-    @cache.rediscache(seconds=86400).cache_on_arguments(namespace='target')
-    def get_target(latest: bool = False, inst_id: int = None,
-                   target_id: int = None, key: str = None) -> dict:
+    @cache.cache(ttl=300, backend='redis', tag='items')
+    def get_item(item_id: int) -> dict:
         nonlocal call_count
         call_count += 1
-        return {
-            'latest': latest,
-            'inst_id': inst_id,
-            'target_id': target_id,
-            'key': key,
-            'data': 'target_data'
-        }
+        return {'id': item_id, 'data': f'data_{item_id}'}
 
-    get_target(latest=True, inst_id=123)
-    get_target(target_id=456, key='main')
+    get_item(100)
+    get_item(200)
     assert call_count == 2
 
-    get_target(latest=True, inst_id=123)
-    get_target(target_id=456, key='main')
+    get_item(100)
+    get_item(200)
     assert call_count == 2
 
-    def _reset_cache_keys(inst_id, target_id, key):
-        cache.delete_rediscache_key(86400, 'target', get_target,
-                                    latest=True, inst_id=inst_id)
-        cache.delete_rediscache_key(86400, 'target', get_target,
-                                    target_id=target_id, key=key)
+    cache.cache_delete(get_item, item_id=100)
 
-    _reset_cache_keys(123, 456, 'main')
-
-    get_target(latest=True, inst_id=123)
+    get_item(100)
     assert call_count == 3
 
-    get_target(target_id=456, key='main')
-    assert call_count == 4
+    get_item(200)
+    assert call_count == 3
+
+
+def test_cache_delete_not_decorated_raises():
+    """Verify cache_delete raises ValueError for non-decorated functions.
+    """
+    def plain_func(x: int) -> int:
+        return x * 2
+
+    with pytest.raises(ValueError, match='not decorated with @cache'):
+        cache.cache_delete(plain_func, x=5)

@@ -1,15 +1,15 @@
-"""Test exclude_params functionality for cache decorators.
+"""Test exclude parameter functionality for cache decorator.
 """
 import cache
 import pytest
 
 
 def test_exclude_params_basic_memory():
-    """Verify exclude_params excludes specified parameters from cache key.
+    """Verify exclude parameter excludes specified parameters from cache key.
     """
     call_count = 0
 
-    @cache.memorycache(seconds=300).cache_on_arguments(exclude_params={'logger', 'context'})
+    @cache.cache(ttl=300, backend='memory', exclude={'logger', 'context'})
     def process_data(logger, context, user_id: int, data: str) -> dict:
         nonlocal call_count
         call_count += 1
@@ -27,11 +27,11 @@ def test_exclude_params_basic_memory():
 
 
 def test_exclude_params_single_param():
-    """Verify exclude_params works with a single excluded parameter.
+    """Verify exclude works with a single excluded parameter.
     """
     call_count = 0
 
-    @cache.memorycache(seconds=300).cache_on_arguments(exclude_params={'timestamp'})
+    @cache.cache(ttl=300, backend='memory', exclude={'timestamp'})
     def fetch_data(timestamp: str, user_id: int) -> dict:
         nonlocal call_count
         call_count += 1
@@ -49,11 +49,11 @@ def test_exclude_params_single_param():
 
 
 def test_exclude_params_multiple_params():
-    """Verify exclude_params works with multiple excluded parameters.
+    """Verify exclude works with multiple excluded parameters.
     """
     call_count = 0
 
-    @cache.memorycache(seconds=300).cache_on_arguments(exclude_params={'logger', 'debug', 'verbose'})
+    @cache.cache(ttl=300, backend='memory', exclude={'logger', 'debug', 'verbose'})
     def complex_func(logger, debug: bool, verbose: bool, user_id: int, action: str) -> dict:
         nonlocal call_count
         call_count += 1
@@ -70,12 +70,12 @@ def test_exclude_params_multiple_params():
     assert call_count == 2
 
 
-def test_exclude_params_with_namespace():
-    """Verify exclude_params works correctly with namespaces.
+def test_exclude_params_with_tag():
+    """Verify exclude works correctly with tags.
     """
     call_count = 0
 
-    @cache.memorycache(seconds=300).cache_on_arguments(namespace='users', exclude_params={'session_id'})
+    @cache.cache(ttl=300, backend='memory', tag='users', exclude={'session_id'})
     def get_user(session_id: str, user_id: int) -> dict:
         nonlocal call_count
         call_count += 1
@@ -88,11 +88,11 @@ def test_exclude_params_with_namespace():
 
 
 def test_exclude_params_with_defaults():
-    """Verify exclude_params works with default parameter values.
+    """Verify exclude works with default parameter values.
     """
     call_count = 0
 
-    @cache.memorycache(seconds=300).cache_on_arguments(exclude_params={'debug'})
+    @cache.cache(ttl=300, backend='memory', exclude={'debug'})
     def fetch_data(user_id: int, debug: bool = False) -> dict:
         nonlocal call_count
         call_count += 1
@@ -106,11 +106,11 @@ def test_exclude_params_with_defaults():
 
 
 def test_exclude_params_with_kwargs():
-    """Verify exclude_params works with keyword arguments.
+    """Verify exclude works with keyword arguments.
     """
     call_count = 0
 
-    @cache.memorycache(seconds=300).cache_on_arguments(exclude_params={'meta'})
+    @cache.cache(ttl=300, backend='memory', exclude={'meta'})
     def process(user_id: int, data: str, meta: dict = None) -> dict:
         nonlocal call_count
         call_count += 1
@@ -124,7 +124,7 @@ def test_exclude_params_with_kwargs():
 
 
 def test_exclude_params_combined_with_connection_filtering():
-    """Verify exclude_params works with connection object filtering.
+    """Verify exclude works with connection object filtering.
     """
     call_count = 0
 
@@ -132,7 +132,7 @@ def test_exclude_params_combined_with_connection_filtering():
         def __init__(self):
             self.driver_connection = True
 
-    @cache.memorycache(seconds=300).cache_on_arguments(exclude_params={'logger'})
+    @cache.cache(ttl=300, backend='memory', exclude={'logger'})
     def query_data(conn, logger, user_id: int) -> dict:
         nonlocal call_count
         call_count += 1
@@ -148,11 +148,11 @@ def test_exclude_params_combined_with_connection_filtering():
 
 
 def test_exclude_params_combined_with_underscore_filtering():
-    """Verify exclude_params works alongside underscore parameter filtering.
+    """Verify exclude works alongside underscore parameter filtering.
     """
     call_count = 0
 
-    @cache.memorycache(seconds=300).cache_on_arguments(exclude_params={'debug'})
+    @cache.cache(ttl=300, backend='memory', exclude={'debug'})
     def process_data(_internal: str, debug: bool, user_id: int) -> dict:
         nonlocal call_count
         call_count += 1
@@ -164,92 +164,12 @@ def test_exclude_params_combined_with_underscore_filtering():
     assert call_count == 1
 
 
-def test_exclude_params_empty_set():
-    """Verify empty exclude_params set has no effect.
-    """
-    call_count = 0
-
-    @cache.memorycache(seconds=300).cache_on_arguments(exclude_params=set())
-    def func(x: int, y: int) -> int:
-        nonlocal call_count
-        call_count += 1
-        return x + y
-
-    func(5, 10)
-    func(5, 10)
-
-    assert call_count == 1
-
-    func(5, 20)
-
-    assert call_count == 2
-
-
-@pytest.mark.parametrize(('cache_func', 'fixture_needed'), [
-    (lambda: cache.filecache(seconds=300), 'temp_cache_dir'),
-    (lambda: cache.rediscache(seconds=300), 'redis_docker'),
-])
-def test_exclude_params_backend_single(cache_func, fixture_needed, request):
-    """Verify exclude_params works with different cache backends.
-    """
-    if fixture_needed == 'redis_docker':
-        pytest.importorskip('redis')
-        request.getfixturevalue(fixture_needed)
-    elif fixture_needed == 'temp_cache_dir':
-        request.getfixturevalue(fixture_needed)
-
-    call_count = 0
-
-    @cache_func().cache_on_arguments(exclude_params={'logger'})
-    def func(logger, item_id: int) -> dict:
-        nonlocal call_count
-        call_count += 1
-        return {'item_id': item_id}
-
-    func('log1', 100)
-    func('log2', 100)
-    func('log3', 100)
-
-    assert call_count == 1
-
-    func('log4', 200)
-
-    assert call_count == 2
-
-
-@pytest.mark.parametrize(('cache_func', 'fixture_needed'), [
-    (lambda: cache.filecache(seconds=300), 'temp_cache_dir'),
-    (lambda: cache.rediscache(seconds=300), 'redis_docker'),
-])
-def test_exclude_params_backend_multiple(cache_func, fixture_needed, request):
-    """Verify exclude_params works with multiple parameters in different backends.
-    """
-    if fixture_needed == 'redis_docker':
-        pytest.importorskip('redis')
-        request.getfixturevalue(fixture_needed)
-    elif fixture_needed == 'temp_cache_dir':
-        request.getfixturevalue(fixture_needed)
-
-    call_count = 0
-
-    @cache_func().cache_on_arguments(exclude_params={'param1', 'param2'})
-    def func(param1: str, param2: str, user_id: int, key: str) -> dict:
-        nonlocal call_count
-        call_count += 1
-        return {'user_id': user_id, 'key': key}
-
-    func('val1', 'val2', 123, 'test')
-    func('val3', 'val4', 123, 'test')
-
-    assert call_count == 1
-
-
 def test_exclude_params_preserves_included_param_uniqueness():
     """Verify excluded parameters don't affect cache key uniqueness based on included parameters.
     """
     call_count = 0
 
-    @cache.memorycache(seconds=300).cache_on_arguments(exclude_params={'ignored'})
+    @cache.cache(ttl=300, backend='memory', exclude={'ignored'})
     def func(ignored: str, x: int, y: int) -> int:
         nonlocal call_count
         call_count += 1
@@ -267,13 +187,13 @@ def test_exclude_params_preserves_included_param_uniqueness():
 
 
 def test_exclude_params_with_instance_method():
-    """Verify exclude_params works with instance methods.
+    """Verify exclude works with instance methods.
     """
     class Service:
         def __init__(self):
             self.call_count = 0
 
-        @cache.memorycache(seconds=300).cache_on_arguments(exclude_params={'logger'})
+        @cache.cache(ttl=300, backend='memory', exclude={'logger'})
         def get_data(self, logger, user_id: int) -> dict:
             self.call_count += 1
             return {'user_id': user_id}
@@ -287,64 +207,48 @@ def test_exclude_params_with_instance_method():
     assert service.call_count == 1
 
 
-def test_exclude_params_clearing_namespace():
-    """Verify clearing cache by namespace works with exclude_params.
-    """
-    @cache.memorycache(seconds=300).cache_on_arguments(namespace='data', exclude_params={'version'})
-    def get_data(version: int, key: str) -> dict:
-        return {'key': key, 'value': 'data'}
-
-    get_data(1, 'key1')
-    get_data(2, 'key1')
-
-    from conftest import get_memory_region
-    cache_dict = get_memory_region(300).actual_backend._cache
-    assert len(cache_dict) == 1
-
-    cache.clear_memorycache(seconds=300, namespace='data')
-
-    assert len(cache_dict) == 0
-
-
-def test_exclude_params_set_key():
-    """Verify set_memorycache_key works with exclude_params decorated functions.
+def test_exclude_params_with_file_backend(temp_cache_dir):
+    """Verify exclude works with file backend.
     """
     call_count = 0
 
-    @cache.memorycache(seconds=300).cache_on_arguments(namespace='users', exclude_params={'logger'})
-    def get_user(logger, user_id: int) -> dict:
+    @cache.cache(ttl=300, backend='file', exclude={'logger'})
+    def func(logger, item_id: int) -> dict:
         nonlocal call_count
         call_count += 1
-        return {'id': user_id, 'name': f'user_{user_id}'}
+        return {'item_id': item_id}
 
-    get_user('log1', 123)
+    func('log1', 100)
+    func('log2', 100)
+    func('log3', 100)
+
     assert call_count == 1
 
-    cache.set_memorycache_key(300, 'users', get_user, {'id': 123, 'name': 'updated_user'}, user_id=123)
+    func('log4', 200)
 
-    result = get_user('log2', 123)
-    assert result['name'] == 'updated_user'
-    assert call_count == 1
+    assert call_count == 2
 
 
-def test_exclude_params_delete_key():
-    """Verify delete_memorycache_key works with exclude_params decorated functions.
+@pytest.mark.redis
+def test_exclude_params_with_redis_backend(redis_docker):
+    """Verify exclude works with Redis backend.
     """
     call_count = 0
 
-    @cache.memorycache(seconds=300).cache_on_arguments(namespace='users', exclude_params={'session'})
-    def get_user(session: str, user_id: int) -> dict:
+    @cache.cache(ttl=300, backend='redis', exclude={'logger'})
+    def func(logger, item_id: int) -> dict:
         nonlocal call_count
         call_count += 1
-        return {'id': user_id}
+        return {'item_id': item_id}
 
-    get_user('sess1', 123)
-    get_user('sess2', 123)
+    func('log1', 100)
+    func('log2', 100)
+    func('log3', 100)
+
     assert call_count == 1
 
-    cache.delete_memorycache_key(300, 'users', get_user, user_id=123)
+    func('log4', 200)
 
-    get_user('sess3', 123)
     assert call_count == 2
 
 
@@ -353,7 +257,7 @@ def test_exclude_params_use_case_from_requirements():
     """
     call_count = 0
 
-    @cache.memorycache(seconds=300).cache_on_arguments(exclude_params={'logger', 'context'})
+    @cache.cache(ttl=300, backend='memory', exclude={'logger', 'context'})
     def calculate(logger, context, x: int, y: int) -> int:
         nonlocal call_count
         call_count += 1

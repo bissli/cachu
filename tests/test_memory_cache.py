@@ -8,7 +8,7 @@ def test_memory_cache_basic_decoration():
     """
     call_count = 0
 
-    @cache.memorycache(seconds=300).cache_on_arguments()
+    @cache.cache(ttl=300, backend='memory')
     def expensive_func(x: int) -> int:
         nonlocal call_count
         call_count += 1
@@ -27,7 +27,7 @@ def test_memory_cache_different_args():
     """
     call_count = 0
 
-    @cache.memorycache(seconds=300).cache_on_arguments()
+    @cache.cache(ttl=300, backend='memory')
     def func(x: int) -> int:
         nonlocal call_count
         call_count += 1
@@ -39,10 +39,10 @@ def test_memory_cache_different_args():
     assert call_count == 2
 
 
-def test_memory_cache_with_namespace():
-    """Verify namespace parameter is accepted and used.
+def test_memory_cache_with_tag():
+    """Verify tag parameter is accepted and used.
     """
-    @cache.memorycache(seconds=300).cache_on_arguments(namespace='users')
+    @cache.cache(ttl=300, backend='memory', tag='users')
     def get_user(user_id: int) -> dict:
         return {'id': user_id, 'name': 'test'}
 
@@ -50,12 +50,12 @@ def test_memory_cache_with_namespace():
     assert result['id'] == 123
 
 
-def test_memory_cache_should_cache_fn():
-    """Verify should_cache_fn prevents caching of falsy values.
+def test_memory_cache_cache_if():
+    """Verify cache_if prevents caching of specified values.
     """
     call_count = 0
 
-    @cache.memorycache(seconds=300).cache_on_arguments()
+    @cache.cache(ttl=300, backend='memory', cache_if=lambda r: r is not None)
     def get_value(x: int) -> int | None:
         nonlocal call_count
         call_count += 1
@@ -66,26 +66,7 @@ def test_memory_cache_should_cache_fn():
 
     assert result1 is None
     assert result2 is None
-    assert call_count == 2
-
-
-def test_memory_cache_multiple_regions():
-    """Verify multiple expiration times create separate regions.
-    """
-    @cache.memorycache(seconds=60).cache_on_arguments()
-    def func1(x: int) -> int:
-        return x * 2
-
-    @cache.memorycache(seconds=300).cache_on_arguments()
-    def func2(x: int) -> int:
-        return x * 3
-
-    func1(5)
-    func2(5)
-
-    from conftest import has_memory_region
-    assert has_memory_region(60)
-    assert has_memory_region(300)
+    assert call_count == 2  # Called twice since None wasn't cached
 
 
 def test_memory_cache_with_kwargs():
@@ -93,7 +74,7 @@ def test_memory_cache_with_kwargs():
     """
     call_count = 0
 
-    @cache.memorycache(seconds=300).cache_on_arguments()
+    @cache.cache(ttl=300, backend='memory')
     def func(x: int, y: int = 10) -> int:
         nonlocal call_count
         call_count += 1
@@ -105,3 +86,63 @@ def test_memory_cache_with_kwargs():
 
     assert result1 == result2 == result3 == 15
     assert call_count == 1
+
+
+def test_memory_cache_skip_cache():
+    """Verify _skip_cache bypasses the cache.
+    """
+    call_count = 0
+
+    @cache.cache(ttl=300, backend='memory')
+    def func(x: int) -> int:
+        nonlocal call_count
+        call_count += 1
+        return x * 2
+
+    result1 = func(5)
+    assert call_count == 1
+
+    # This should skip cache and call the function
+    result2 = func(5, _skip_cache=True)
+    assert call_count == 2
+    assert result1 == result2 == 10
+
+
+def test_memory_cache_overwrite_cache():
+    """Verify _overwrite_cache refreshes the cached value.
+    """
+    counter = [0]
+
+    @cache.cache(ttl=300, backend='memory')
+    def func(x: int) -> int:
+        counter[0] += 1
+        return x * counter[0]
+
+    result1 = func(5)
+    assert result1 == 5  # 5 * 1
+
+    result2 = func(5)
+    assert result2 == 5  # Cached
+
+    result3 = func(5, _overwrite_cache=True)
+    assert result3 == 10  # 5 * 2, and overwrites cache
+
+    result4 = func(5)
+    assert result4 == 10  # Returns new cached value
+
+
+def test_memory_cache_info():
+    """Verify cache_info returns statistics.
+    """
+    @cache.cache(ttl=300, backend='memory')
+    def func(x: int) -> int:
+        return x * 2
+
+    func(5)  # miss
+    func(5)  # hit
+    func(10)  # miss
+    func(5)  # hit
+
+    info = cache.cache_info(func)
+    assert info.hits == 2
+    assert info.misses == 2
