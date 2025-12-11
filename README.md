@@ -62,7 +62,7 @@ cachu.configure(
 
 ### Package Isolation
 
-Each package automatically gets isolated configuration. This prevents conflicts when multiple libraries use the cachu package:
+Each package automatically gets isolated configuration, preventing conflicts when multiple libraries use cachu:
 
 ```python
 # In library_a/config.py
@@ -73,7 +73,18 @@ cachu.configure(key_prefix='lib_a:', redis_url='redis://redis-a:6379/0')
 import cachu
 cachu.configure(key_prefix='lib_b:', redis_url='redis://redis-b:6379/0')
 
-# Each library uses its own configuration automatically
+# Each library's @cache calls use its own configuration automatically
+```
+
+To override the automatic detection, specify the `package` parameter:
+
+```python
+from cachu import cache
+
+# This function will use library_a's configuration
+@cache(ttl=300, package='library_a')
+def get_shared_data(id: int) -> dict:
+    return fetch(id)
 ```
 
 Retrieve configuration:
