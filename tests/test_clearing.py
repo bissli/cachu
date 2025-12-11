@@ -111,3 +111,64 @@ def test_cache_clear_redis_by_tag(redis_docker):
     get_product(1)
 
     cachu.cache_clear(tag='users', backend='redis', ttl=300)
+
+
+def test_cache_clear_without_instantiated_backend():
+    """Verify cache_clear creates backend when none exists.
+
+    This tests that cache_clear() properly creates a backend instance when
+    both backend and ttl are specified, even if no cached function has been called.
+
+    This is essential for distributed caches (Redis) where cache_clear may be called
+    from a different process than the one that populated the cache.
+    """
+    from cachu.decorator import _backends, clear_backends
+
+    # Clear all backends to simulate a fresh process
+    clear_backends()
+
+    # Verify no backends exist (simulates import script that hasn't called cached functions)
+    assert len(_backends) == 0
+
+    # Call cache_clear with specific backend and ttl
+    # Before the fix, this would do nothing because no backend existed
+    # After the fix, this should create the backend and attempt to clear it
+    cachu.cache_clear(backend='memory', ttl=999, tag='test_tag')
+
+    # With the fix, a backend should have been created
+    assert len(_backends) == 1
+    key = list(_backends.keys())[0]
+    assert key[1] == 'memory'  # backend type
+    assert key[2] == 999  # ttl
+
+
+def test_cache_clear_creates_backend_and_clears(temp_cache_dir):
+    """Verify cache_clear can clear data in file backend without prior instantiation.
+
+    File backend persists data to disk, allowing us to verify that cache_clear
+    can find and delete cached data even when called from a 'fresh' process state.
+    """
+    from cachu.backends import NO_VALUE
+    from cachu.config import _get_caller_package
+    from cachu.decorator import _backends, _get_backend, clear_backends
+
+    package = _get_caller_package()
+
+    # First, create some cached data in a file backend
+    backend = _get_backend(package, 'file', 888)
+    backend.set('14m:test_func||file_tag||x=1', 'test_value', 888)
+    assert backend.get('14m:test_func||file_tag||x=1') == 'test_value'
+
+    # Clear backend instances (but file data persists on disk)
+    clear_backends()
+    assert len(_backends) == 0
+
+    # cache_clear should create a new backend instance and clear the persisted data
+    cleared = cachu.cache_clear(backend='file', ttl=888, tag='file_tag')
+
+    # Backend should have been created
+    assert len(_backends) == 1
+
+    # Data should have been cleared (verify by getting a fresh backend)
+    backend = _get_backend(package, 'file', 888)
+    assert backend.get('14m:test_func||file_tag||x=1') is NO_VALUE
