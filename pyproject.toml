@@ -16,6 +16,7 @@ redis = ["redis"]
 test = [
     "pytest",
     "pytest-mock",
+    "redis",
     "testcontainers[redis]",
 ]
 
