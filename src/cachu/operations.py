@@ -124,8 +124,6 @@ def cache_clear(
     if package is None:
         package = _get_caller_package()
 
-    cfg = get_config(package)
-
     if backend is not None:
         backends_to_clear = [backend]
     else:

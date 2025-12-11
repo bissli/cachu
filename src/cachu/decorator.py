@@ -220,12 +220,7 @@ def get_cache_info(fn: Callable[..., Any]) -> CacheInfo:
     Returns
         CacheInfo with hits, misses, and currsize
     """
-    if hasattr(fn, '__wrapped__'):
-        actual_fn = fn
-    else:
-        actual_fn = fn
-
-    fn_id = id(actual_fn)
+    fn_id = id(fn)
 
     with _stats_lock:
         hits, misses = _stats.get(fn_id, (0, 0))
