@@ -7,13 +7,13 @@ Flexible caching library with support for memory, file, and Redis backends.
 **Basic installation:**
 
 ```bash
-pip install git+https://github.com/bissli/cachu.git
+pip install cachu
 ```
 
 **With Redis support:**
 
 ```bash
-pip install git+https://github.com/bissli/cachu.git#egg=cachu[redis]
+pip install cachu[redis]
 ```
 
 ## Quick Start
@@ -89,7 +89,7 @@ all_configs = cachu.get_all_configs()       # All configurations
 ### Basic Caching
 
 ```python
-from cachu import cachu
+from cachu import cache
 
 @cache(ttl=300, backend='memory')
 def expensive_operation(param: str) -> dict:
@@ -120,6 +120,8 @@ def fetch_external_data(api_key: str) -> dict:
 Tags organize cache entries into logical groups for selective clearing:
 
 ```python
+from cachu import cache, cache_clear
+
 @cache(ttl=300, tag='users')
 def get_user(user_id: int) -> dict:
     return fetch_user(user_id)
@@ -129,7 +131,7 @@ def get_product(product_id: int) -> dict:
     return fetch_product(product_id)
 
 # Clear only user caches
-cachu.cache_clear(tag='users', backend='memory', ttl=300)
+cache_clear(tag='users', backend='memory', ttl=300)
 ```
 
 ### Conditional Caching
@@ -196,12 +198,14 @@ result = get_data(123, _overwrite_cache=True)
 Track hits and misses:
 
 ```python
+from cachu import cache, cache_info
+
 @cache(ttl=300)
 def get_user(user_id: int) -> dict:
     return fetch_user(user_id)
 
 # After some usage
-info = cachu.cache_info(get_user)
+info = cache_info(get_user)
 print(f"Hits: {info.hits}, Misses: {info.misses}, Size: {info.currsize}")
 ```
 
@@ -249,7 +253,7 @@ cache_delete(get_user, user_id=123)
 ### Clearing Caches
 
 ```python
-from cachu import cachu_clear
+from cachu import cache_clear
 
 # Clear specific region
 cache_clear(backend='memory', ttl=300)
@@ -284,7 +288,8 @@ def get_data(id: int) -> dict:
     return fetch(id)
 
 # In tests/conftest.py
-cachu.cache_clear(backend='memory', ttl=300, package='myapp')
+from cachu import cache_clear
+cache_clear(backend='memory', ttl=300, package='myapp')
 ```
 
 ## Instance and Class Methods
