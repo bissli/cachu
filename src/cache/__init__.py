@@ -1,39 +1,25 @@
-"""Flexible caching library built on dogpile.cache.
+"""Flexible caching library with support for memory, file, and Redis backends.
 """
-from .cache import clear_cache_for_namespace, clear_defaultcache
-from .cache import clear_filecache, clear_memorycache, clear_rediscache
-from .cache import defaultcache, delete_defaultcache_key, delete_filecache_key
-from .cache import delete_memorycache_key, delete_rediscache_key, filecache
-from .cache import get_redis_client, memorycache, rediscache
-from .cache import set_defaultcache_key, set_filecache_key
-from .cache import set_memorycache_key, set_rediscache_key
-from .config import config, configure, disable, enable, get_all_configs
-from .config import get_config, is_disabled
+from .backends.redis import get_redis_client
+from .config import configure, disable, enable, get_all_configs, get_config
+from .config import is_disabled
+from .decorator import cache, get_backend
+from .operations import cache_clear, cache_delete, cache_get, cache_info
+from .operations import cache_set
 
 __all__ = [
     'configure',
-    'config',
     'get_config',
     'get_all_configs',
     'disable',
     'enable',
     'is_disabled',
+    'cache',
+    'cache_get',
+    'cache_set',
+    'cache_delete',
+    'cache_clear',
+    'cache_info',
+    'get_backend',
     'get_redis_client',
-    'memorycache',
-    'filecache',
-    'rediscache',
-    'defaultcache',
-    'clear_memorycache',
-    'clear_filecache',
-    'clear_rediscache',
-    'clear_defaultcache',
-    'clear_cache_for_namespace',
-    'set_memorycache_key',
-    'set_filecache_key',
-    'set_rediscache_key',
-    'set_defaultcache_key',
-    'delete_memorycache_key',
-    'delete_filecache_key',
-    'delete_rediscache_key',
-    'delete_defaultcache_key',
-    ]
+]
