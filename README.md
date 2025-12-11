@@ -1,511 +1,392 @@
 # cache
 
-Flexible caching library built on dogpile.cache with support for memory, file, and Redis backends.
+Flexible caching library with support for memory, file, and Redis backends.
 
 ## Installation
 
 **Basic installation:**
 
 ```bash
-# Using pip
 pip install git+https://github.com/bissli/cache.git
-
-# Using Poetry
-poetry add git+https://github.com/bissli/cache.git
 ```
 
 **With Redis support:**
 
 ```bash
-# Using pip
 pip install git+https://github.com/bissli/cache.git#egg=cache[redis]
-
-# Using Poetry
-poetry add git+https://github.com/bissli/cache.git -E redis
 ```
 
-**In pyproject.toml:**
+## Quick Start
 
-```toml
-[tool.poetry.dependencies]
-cache = {git = "https://github.com/bissli/cache.git"}
+```python
+import cache
 
-# Or with Redis support:
-cache = {git = "https://github.com/bissli/cache.git", extras = ["redis"]}
-```
+# Configure once at startup
+cache.configure(backend='memory', key_prefix='v1:')
 
-**In requirements.txt:**
+# Use the @cache decorator
+@cache.cache(ttl=300)
+def get_user(user_id: int) -> dict:
+    return fetch_from_database(user_id)
 
-```
-git+https://github.com/bissli/cache.git#egg=cache
-
-# Or with Redis support:
-git+https://github.com/bissli/cache.git#egg=cache[redis]
+# Cached automatically
+user = get_user(123)  # Cache miss - fetches from DB
+user = get_user(123)  # Cache hit - returns cached value
 ```
 
 ## Configuration
 
-Configure the cache settings at application startup:
+Configure cache settings at application startup:
 
 ```python
 import cache
 
 cache.configure(
-    debug_key="v1:",
-    tmpdir="/var/cache/myapp"
+    backend='memory',           # Default backend: 'memory', 'file', or 'redis'
+    key_prefix='v1:',           # Prefix for all cache keys
+    file_dir='/var/cache/app',  # Directory for file cache
+    redis_url='redis://localhost:6379/0',  # Redis connection URL
+    redis_distributed=False,    # Use distributed locks for Redis
 )
 ```
 
-**To enable memory caching**, you must explicitly set the memory backend:
+### Configuration Options
 
-```python
-import cache
+| Option | Default | Description |
+|--------|---------|-------------|
+| `backend` | `'memory'` | Default backend type |
+| `key_prefix` | `''` | Prefix for all cache keys (useful for versioning) |
+| `file_dir` | `'/tmp'` | Directory for file-based caches |
+| `redis_url` | `'redis://localhost:6379/0'` | Redis connection URL |
+| `redis_distributed` | `False` | Enable distributed locks for Redis |
 
-cache.configure(
-    memory="dogpile.cache.memory_pickle",  # Required to enable memory cache
-)
-```
+### Package Isolation
 
-**To enable Redis caching**, you must explicitly set the Redis backend:
-
-```python
-import cache
-
-cache.configure(
-    redis="dogpile.cache.redis",  # Required to enable Redis
-    redis_host="localhost",
-    redis_port=6379,
-    redis_db=0,
-    redis_ssl=False,
-    redis_distributed=False
-)
-```
-
-Available configuration options:
-- `debug_key`: Prefix for cache keys (default: "")
-- `memory`: Backend for memory cache (default: "dogpile.cache.null", must be set to "dogpile.cache.memory_pickle" to enable memory caching)
-- `redis`: Backend for redis cache (default: "dogpile.cache.null", must be set to "dogpile.cache.redis" to enable Redis)
-- `redis_host`: Redis server hostname (default: "localhost")
-- `redis_port`: Redis server port (default: 6379)
-- `redis_db`: Redis database number (default: 0)
-- `redis_ssl`: Use SSL for Redis connection (default: False)
-- `redis_distributed`: Use distributed locks for Redis (default: False)
-- `tmpdir`: Directory for file-based caches (default: "/tmp")
-- `default_backend`: Backend for `defaultcache()` - "memory", "redis", or "file" (default: "memory")
-
-### Namespace Isolation
-
-Each calling package automatically gets its own isolated configuration. This prevents configuration conflicts when multiple libraries use the cache package with different settings:
+Each package automatically gets isolated configuration. This prevents conflicts when multiple libraries use the cache package:
 
 ```python
 # In library_a/config.py
 import cache
-cache.configure(debug_key="lib_a:", redis_host="redis-a.example.com")
+cache.configure(key_prefix='lib_a:', redis_url='redis://redis-a:6379/0')
 
 # In library_b/config.py
 import cache
-cache.configure(debug_key="lib_b:", redis_host="redis-b.example.com")
+cache.configure(key_prefix='lib_b:', redis_url='redis://redis-b:6379/0')
 
 # Each library uses its own configuration automatically
 ```
 
-**Script execution**: When code runs as `__main__` (directly executed scripts), the namespace is automatically normalized to `__main__.scriptname` for stability. This prevents namespace fragmentation when the same code is run directly vs imported as a module.
-
-New configurations inherit settings from the default, so you only need to specify what's different:
+Retrieve configuration:
 
 ```python
-# Set defaults for all packages
-from cache.config import _registry, CacheConfig
-_registry._default = CacheConfig(
-    memory="dogpile.cache.memory_pickle",
-    tmpdir="/var/cache/app"
-)
-
-# Package-specific overrides only need to specify changes
-cache.configure(debug_key="mypackage:")
-```
-
-You can also retrieve configuration for a specific namespace:
-
-```python
-import cache
-
-# Get config for the caller's namespace
-cfg = cache.get_config()
-
-# Get config for a specific namespace
-cfg = cache.get_config(namespace="mypackage")
-
-# Get all configurations (useful for debugging)
-all_configs = cache.get_all_configs()
-# Returns: {'_default': {...}, 'mypackage': {...}, ...}
+cfg = cache.get_config()                    # Current package's config
+cfg = cache.get_config(package='mylib')     # Specific package's config
+all_configs = cache.get_all_configs()       # All configurations
 ```
 
 ## Usage
 
-### Memory Cache
+### Basic Caching
 
 ```python
-from cache import memorycache
+from cache import cache
 
-@memorycache(seconds=300).cache_on_arguments()
-def expensive_operation(param):
-    # ... expensive computation
-    return result
+@cache(ttl=300, backend='memory')
+def expensive_operation(param: str) -> dict:
+    return compute_result(param)
 ```
 
-### File Cache
+### Backend Types
 
 ```python
-from cache import filecache
+# Memory cache (default)
+@cache(ttl=300, backend='memory')
+def fast_lookup(key: str) -> str:
+    return fetch(key)
 
-@filecache(seconds=3600).cache_on_arguments()
-def load_data(filename):
-    # ... load and process file
-    return data
+# File cache (persists across restarts)
+@cache(ttl=3600, backend='file')
+def load_config(name: str) -> dict:
+    return parse_config_file(name)
+
+# Redis cache (shared across processes)
+@cache(ttl=86400, backend='redis')
+def fetch_external_data(api_key: str) -> dict:
+    return call_external_api(api_key)
 ```
 
-### Redis Cache
+### Tags for Grouping
+
+Tags organize cache entries into logical groups for selective clearing:
 
 ```python
-from cache import rediscache
-
-@rediscache(seconds=86400).cache_on_arguments()
-def fetch_external_data(api_key):
-    # ... call external API
-    return response
-```
-
-### Default Cache
-
-Use `defaultcache` when you want to switch cache backends via configuration without changing code. This is useful for using memory cache in development and Redis in production:
-
-```python
-from cache import defaultcache
-
-@defaultcache(seconds=300).cache_on_arguments()
-def get_data(key):
-    # ... fetch data
-    return result
-```
-
-Configure which backend to use:
-
-```python
-import cache
-
-# Development: use memory cache
-cache.configure(
-    default_backend="memory",
-    memory="dogpile.cache.memory_pickle"
-)
-
-# Production: use Redis
-cache.configure(
-    default_backend="redis",
-    redis="dogpile.cache.redis",
-    redis_host="redis.example.com"
-)
-```
-
-The `default_backend` option accepts "memory", "redis", or "file". All related operations work with the configured backend:
-
-```python
-from cache import (
-    defaultcache,
-    clear_defaultcache,
-    set_defaultcache_key,
-    delete_defaultcache_key
-)
-
-@defaultcache(seconds=300).cache_on_arguments(namespace="users")
-def get_user(user_id):
+@cache(ttl=300, tag='users')
+def get_user(user_id: int) -> dict:
     return fetch_user(user_id)
 
-# These use whatever backend is configured
-clear_defaultcache(seconds=300, namespace="users")
-set_defaultcache_key(300, "users", get_user, {"id": 123}, user_id=123)
-delete_defaultcache_key(300, "users", get_user, user_id=123)
+@cache(ttl=300, tag='products')
+def get_product(product_id: int) -> dict:
+    return fetch_product(product_id)
+
+# Clear only user caches
+cache.cache_clear(tag='users', backend='memory', ttl=300)
 ```
 
-### Namespaces
+### Conditional Caching
 
-Namespaces organize cache keys into logical groups that can be selectively cleared:
+Cache results only when a condition is met:
 
 ```python
-from cache import memorycache, rediscache
+# Don't cache None results
+@cache(ttl=300, cache_if=lambda result: result is not None)
+def find_user(email: str) -> dict | None:
+    return db.find_by_email(email)
 
-# Group related caches by namespace
-@memorycache(seconds=300).cache_on_arguments(namespace="users")
-def get_user_profile(user_id):
-    return fetch_user_from_db(user_id)
+# Don't cache empty lists
+@cache(ttl=300, cache_if=lambda result: len(result) > 0)
+def search(query: str) -> list:
+    return db.search(query)
+```
 
-@rediscache(seconds=3600).cache_on_arguments(namespace="api_data")
-def fetch_weather(city):
-    return call_weather_api(city)
+### Validation Callbacks
 
-# Clear specific namespace without affecting other cached data
-clear_memorycache(seconds=300, namespace="users")
-clear_rediscache(seconds=3600, namespace="api_data")
+Validate cached entries before returning:
+
+```python
+@cache(ttl=3600, validate=lambda entry: entry.age < 1800)
+def get_price(symbol: str) -> float:
+    # TTL is 1 hour, but recompute after 30 minutes
+    return fetch_live_price(symbol)
+
+# Validate based on value
+def check_version(entry):
+    return entry.value.get('version') == CURRENT_VERSION
+
+@cache(ttl=86400, validate=check_version)
+def get_config() -> dict:
+    return load_config()
+```
+
+The `entry` parameter is a `CacheEntry` with:
+- `value`: The cached value
+- `created_at`: Unix timestamp when cached
+- `age`: Seconds since creation
+
+### Per-Call Control
+
+Control caching behavior for individual calls:
+
+```python
+@cache(ttl=300)
+def get_data(id: int) -> dict:
+    return fetch(id)
+
+# Normal call - uses cache
+result = get_data(123)
+
+# Skip cache for this call only (don't read or write cache)
+result = get_data(123, _skip_cache=True)
+
+# Force refresh - execute and overwrite cached value
+result = get_data(123, _overwrite_cache=True)
+```
+
+### Cache Statistics
+
+Track hits and misses:
+
+```python
+@cache(ttl=300)
+def get_user(user_id: int) -> dict:
+    return fetch_user(user_id)
+
+# After some usage
+info = cache.cache_info(get_user)
+print(f"Hits: {info.hits}, Misses: {info.misses}, Size: {info.currsize}")
+```
+
+### Excluding Parameters
+
+Exclude parameters from the cache key:
+
+```python
+@cache(ttl=300, exclude={'logger', 'context'})
+def process_data(logger, context, user_id: int, data: str) -> dict:
+    logger.info(f"Processing for user {user_id}")
+    return compute(data)
+
+# Different logger/context values use the same cache entry
+process_data(logger1, ctx1, 123, 'test')  # Cache miss
+process_data(logger2, ctx2, 123, 'test')  # Cache hit
+```
+
+**Automatic filtering**: The library automatically excludes:
+- `self` and `cls` parameters
+- Parameters starting with underscore (`_`)
+- Database connection objects
+
+## CRUD Operations
+
+### Direct Cache Manipulation
+
+```python
+from cache import cache_get, cache_set, cache_delete, cache_clear
+
+@cache(ttl=300, tag='users')
+def get_user(user_id: int) -> dict:
+    return fetch_user(user_id)
+
+# Get cached value without calling function
+user = cache_get(get_user, user_id=123, default=None)
+
+# Set cache value directly
+cache_set(get_user, {'id': 123, 'name': 'Updated'}, user_id=123)
+
+# Delete specific cache entry
+cache_delete(get_user, user_id=123)
 ```
 
 ### Clearing Caches
 
-Clear caches using optional `seconds` and `namespace` parameters:
-
 ```python
-from cache import clear_memorycache, clear_filecache, clear_rediscache
+from cache import cache_clear
 
 # Clear specific region
-clear_memorycache(seconds=300)
-clear_filecache(seconds=3600)
-clear_rediscache(seconds=86400)
+cache_clear(backend='memory', ttl=300)
 
-# Clear specific namespace in a region
-clear_memorycache(seconds=300, namespace="users")
+# Clear by tag
+cache_clear(tag='users', backend='memory', ttl=300)
 
-# Clear all regions
-clear_memorycache()
+# Clear all TTLs for a backend
+cache_clear(backend='memory')
 
-# Clear namespace across all regions
-clear_memorycache(namespace="users")
+# Clear everything
+cache_clear()
 ```
 
 **Clearing behavior:**
 
-| seconds   | namespace   | Behavior                                                    |
-| --------- | ----------- | ----------                                                  |
-| `300`     | `None`      | Clears all keys in the 300-second region                    |
-| `300`     | `"users"`   | Clears only "users" namespace keys in the 300-second region |
-| `None`    | `None`      | Clears all keys in all regions                              |
-| `None`    | `"users"`   | Clears "users" namespace keys across all regions            |
+| `ttl` | `tag` | `backend` | Behavior |
+|-------|-------|-----------|----------|
+| `300` | `None` | `'memory'` | All keys in 300s memory region |
+| `300` | `'users'` | `'memory'` | Only "users" tag in 300s memory region |
+| `None` | `None` | `'memory'` | All memory regions |
+| `None` | `'users'` | `None` | "users" tag across all backends |
 
-### Cross-Module Cache Clearing
+### Cross-Module Clearing
 
-When clearing caches from a different module than where the cache decorators were applied, use the `package` parameter or the `clear_cache_for_namespace()` helper:
+When clearing from a different module, use the `package` parameter:
 
 ```python
-from cache import clear_memorycache, clear_cache_for_namespace
+# In myapp/service.py
+@cache(ttl=300)
+def get_data(id: int) -> dict:
+    return fetch(id)
 
-# In myapp/service.py - cache is created with package "myapp"
-@memorycache(seconds=300).cache_on_arguments()
-def get_data(id):
-    return fetch_data(id)
-
-# In tests/conftest.py - clearing from different module
-# Without package, this would look for "tests" package and fail silently
-clear_memorycache(seconds=300, package="myapp")
-
-# Or use the helper function for convenience
-clear_cache_for_namespace("myapp", backend="memory", seconds=300)
-clear_cache_for_namespace("myapp")  # Clears all backends for namespace
+# In tests/conftest.py
+cache.cache_clear(backend='memory', ttl=300, package='myapp')
 ```
 
-The `clear_cache_for_namespace()` helper accepts:
-- `namespace`: The namespace to clear (required)
-- `backend`: "memory", "file", "redis", or None for all backends
-- `seconds`: Specific TTL to clear, or None for all TTLs
-
-### Setting Specific Keys
-
-Set cache values directly without calling the cached function:
+## Instance and Class Methods
 
 ```python
-from cache import set_memorycache_key, set_filecache_key, set_rediscache_key
-
-@memorycache(seconds=300).cache_on_arguments(namespace="users")
-def get_user_profile(user_id):
-    return fetch_user_from_db(user_id)
-
-# Cache initial data
-profile = get_user_profile(123)  # Cached
-
-# Update cache directly without fetching from DB
-updated_profile = {'id': 123, 'name': 'John Doe', 'email': 'john@example.com'}
-set_memorycache_key(300, "users", get_user_profile, updated_profile, user_id=123)
-
-# Next call returns updated data from cache
-profile = get_user_profile(123)  # Returns updated_profile
-```
-
-**Multiple parameters:**
-
-```python
-@rediscache(seconds=86400).cache_on_arguments(namespace="analytics")
-def get_metrics(user_id, metric_type, period="daily"):
-    return calculate_metrics(user_id, metric_type, period)
-
-# Set specific cached metrics directly
-new_metrics = {'views': 1500, 'clicks': 250}
-set_rediscache_key(
-    86400,
-    "analytics",
-    get_metrics,
-    new_metrics,
-    user_id=123,
-    metric_type="views",
-    period="daily"
-)
-```
-
-**When to use:**
-
-- **Pre-warming cache**: Populate cache with computed values during off-peak hours
-- **External updates**: Update cache when data changes through external means (webhooks, message queues)
-- **Optimistic updates**: Update cache immediately with expected values before async operations complete
-- **Batch updates**: Efficiently update multiple cache entries with pre-computed values
-
-### Deleting Specific Keys
-
-Delete individual cache entries by providing the exact parameters used when caching:
-
-```python
-from cache import delete_memorycache_key, delete_filecache_key, delete_rediscache_key
-
-@memorycache(seconds=300).cache_on_arguments(namespace="users")
-def get_user_profile(user_id):
-    return fetch_user_from_db(user_id)
-
-# Cache some data
-profile = get_user_profile(123)  # Cached
-
-# Delete specific cache entry when user profile is updated
-delete_memorycache_key(300, "users", get_user_profile, user_id=123)
-
-# Next call will fetch fresh data
-profile = get_user_profile(123)  # Cache miss, fetches from DB
-```
-
-**Multiple parameters:**
-
-```python
-@rediscache(seconds=86400).cache_on_arguments(namespace="analytics")
-def get_metrics(user_id, metric_type, period="daily"):
-    return calculate_metrics(user_id, metric_type, period)
-
-# Delete specific cached metrics
-delete_rediscache_key(
-    86400,
-    "analytics",
-    get_metrics,
-    user_id=123,
-    metric_type="views",
-    period="daily"
-)
-```
-
-**When to use:**
-
-- **Single entry updates**: When specific data changes (e.g., user updates their profile)
-- **Selective invalidation**: When you need to invalidate one cache entry without affecting others
-- **Precise control**: When clearing an entire namespace or region would be too broad
-
-**Key operations comparison:**
-
-| Operation              | Scope                                    | Use Case                           |
-| ---------------------- | ---------------------------------------- | ---------------------------------- |
-| `set_*_key()`          | Single cache entry with exact parameters | Update cache with new value        |
-| `delete_*_key()`       | Single cache entry with exact parameters | User updates their profile         |
-| `clear_*(namespace=X)` | All keys in namespace across region(s)   | All user data needs refresh        |
-| `clear_*(seconds=X)`   | All keys in specific time-based region   | Region-wide cache invalidation     |
-| `clear_*()`            | All keys in all regions                  | Complete cache reset (development) |
-
-## Intelligent Parameter Filtering
-
-The library automatically filters out implementation details from cache keys, ensuring keys are based only on meaningful data parameters:
-
-**Automatic filtering:**
-- `self` and `cls` parameters (for instance and class methods)
-- Database connection objects (detected using heuristics: objects with `driver_connection`, `dialect`, or `engine` attributes, or types containing 'Connection', 'Engine', 'psycopg', 'pyodbc', or 'sqlite3')
-- Parameters starting with underscore (`_`)
-
-**Instance methods:**
-
-```python
-from cache import memorycache
-
 class UserRepository:
-    def __init__(self, db_connection):
-        self.conn = db_connection
+    def __init__(self, db):
+        self.db = db
 
-    @memorycache(seconds=300).cache_on_arguments()
-    def get_user(self, user_id):
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT * FROM users WHERE id = ?", (user_id,))
-        return cursor.fetchone()
+    @cache(ttl=300)
+    def get_user(self, user_id: int) -> dict:
+        return self.db.fetch(user_id)
 
-# Both calls use the same cache entry (keyed only by user_id)
-repo1 = UserRepository(connection1)
-repo2 = UserRepository(connection2)
-result = repo1.get_user(123)  # Cached
-result = repo2.get_user(123)  # Cache hit
+    @classmethod
+    @cache(ttl=300)
+    def get_default_user(cls) -> dict:
+        return cls.DEFAULT_USER
+
+    @staticmethod
+    @cache(ttl=300)
+    def get_guest() -> dict:
+        return {'id': 0, 'name': 'Guest'}
 ```
 
-**Database connections:**
+## Testing
 
-```python
-@memorycache(seconds=300).cache_on_arguments()
-def get_user_data(conn, user_id):
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM users WHERE id = ?", (user_id,))
-    return cursor.fetchone()
-
-# Both calls use the same cache entry (keyed only by user_id)
-result = get_user_data(connection1, 123)  # Cached
-result = get_user_data(connection2, 123)  # Cache hit
-```
-
-## Testing Utilities
-
-For testing, use `disable()` to bypass all caching:
+Disable caching globally for tests:
 
 ```python
 import cache
-
-# Disable caching globally (e.g., in conftest.py)
-cache.disable()
-
-# All cached functions now execute without caching
-@cache.memorycache(300).cache_on_arguments()
-def get_data(id):
-    return fetch_data(id)  # Always called, never cached
-
-# Re-enable caching when needed
-cache.enable()
-
-# Check current state
-if cache.is_disabled():
-    print("Caching is disabled")
-```
-
-This is the recommended approach for pytest:
-
-```python
-# conftest.py
-import cache
+import pytest
 
 @pytest.fixture(autouse=True)
 def disable_caching():
     cache.disable()
     yield
     cache.enable()
+
+# Check state
+if cache.is_disabled():
+    print("Caching is disabled")
 ```
 
-The `disable()` function:
-- Bypasses all cache lookups at call time
-- Works immediately on all existing cached functions
-- No need to clear data since caching is completely bypassed
-- Can be toggled on/off at any point during execution
+## Advanced
+
+### Direct Backend Access
+
+```python
+from cache import get_backend
+
+backend = get_backend('memory', ttl=300)
+backend.set('my_key', {'data': 'value'}, ttl=300)
+value = backend.get('my_key')
+backend.delete('my_key')
+```
+
+### Redis Client Access
+
+```python
+from cache import get_redis_client
+
+client = get_redis_client()
+client.set('direct_key', 'value')
+```
+
+## Public API
+
+```python
+from cache import (
+    # Configuration
+    configure,
+    get_config,
+    get_all_configs,
+    disable,
+    enable,
+    is_disabled,
+
+    # Decorator
+    cache,
+
+    # CRUD Operations
+    cache_get,
+    cache_set,
+    cache_delete,
+    cache_clear,
+    cache_info,
+
+    # Advanced
+    get_backend,
+    get_redis_client,
+)
+```
 
 ## Features
 
-- **Multiple backends**: Memory, file (DBM), and Redis support
-- **Flexible expiration**: Configure different TTLs for different use cases
-- **Namespace support**: Organize and selectively clear cache regions
-- **Namespace isolation**: Each calling package gets isolated configuration automatically
-- **Cross-module clearing**: Clear caches from any module using explicit namespace parameters
-- **Configurable default backend**: Switch between memory/file/Redis via configuration with `defaultcache`
-- **Global disable/enable**: Bypass all caching with `disable()` for testing
-- **Configuration introspection**: View all configs with `get_all_configs()`
-- **Intelligent filtering**: Automatically excludes `self`, `cls`, database connections, and underscore-prefixed parameters
-- **Custom key generation**: Smart key generation based on function signatures
+- **Multiple backends**: Memory, file (DBM), and Redis
+- **Flexible TTL**: Configure different TTLs for different use cases
+- **Tags**: Organize and selectively clear cache entries
+- **Package isolation**: Each package gets isolated configuration
+- **Conditional caching**: Cache based on result value
+- **Validation callbacks**: Validate entries before returning
+- **Per-call control**: Skip or overwrite cache per call
+- **Statistics**: Track hits, misses, and cache size
+- **Intelligent filtering**: Auto-excludes `self`, `cls`, connections, and `_` params
+- **Global disable**: Bypass all caching for testing
