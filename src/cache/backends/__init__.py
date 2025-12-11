@@ -1,8 +1,8 @@
 """Cache backend implementations.
 """
 from abc import ABC, abstractmethod
-from typing import Any, Iterator
-
+from typing import Any
+from collections.abc import Iterator
 
 NO_VALUE = object()
 

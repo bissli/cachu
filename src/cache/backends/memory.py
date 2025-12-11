@@ -4,8 +4,8 @@ import fnmatch
 import pickle
 import threading
 import time
-from typing import Any
 from collections.abc import Iterator
+from typing import Any
 
 from . import NO_VALUE, Backend
 

@@ -3,8 +3,8 @@
 import pickle
 import struct
 import time
-from typing import TYPE_CHECKING, Any
 from collections.abc import Iterator
+from typing import TYPE_CHECKING, Any
 
 from . import NO_VALUE, Backend
 

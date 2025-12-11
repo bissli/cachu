@@ -2,15 +2,15 @@
 """
 import dbm
 import fnmatch
+import pathlib
 import pickle
 import struct
 import threading
 import time
-from typing import Any
 from collections.abc import Iterator
+from typing import Any
 
 from . import NO_VALUE, Backend
-import pathlib
 
 _METADATA_FORMAT = 'dd'
 _METADATA_SIZE = struct.calcsize(_METADATA_FORMAT)

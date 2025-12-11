@@ -1,8 +1,8 @@
 """Cache key generation and parameter filtering.
 """
 import inspect
-from typing import Any
 from collections.abc import Callable
+from typing import Any
 
 
 def _is_connection_like(obj: Any) -> bool:
