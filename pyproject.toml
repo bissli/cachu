@@ -1,6 +1,6 @@
 [project]
 name = "cachu"
-version = "0.1.1"
+version = "0.1.2"
 description = "Flexible caching library built on dogpile.cache"
 readme = "README.md"
 license = "0BSD"
