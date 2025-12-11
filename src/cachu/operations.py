@@ -1,8 +1,8 @@
 """Cache CRUD operations.
 """
 import logging
-from typing import Any
 from collections.abc import Callable
+from typing import Any
 
 from .backends import NO_VALUE
 from .config import _get_caller_package, get_config
@@ -141,19 +141,29 @@ def cache_clear(
 
     from .decorator import _backends, _backends_lock
 
-    with _backends_lock:
-        for (pkg, btype, bttl), backend_instance in list(_backends.items()):
-            if pkg != package:
-                continue
-            if btype not in backends_to_clear:
-                continue
-            if ttl is not None and bttl != ttl:
-                continue
+    # When both backend and ttl are specified, directly get/create and clear that backend.
+    # This is essential for distributed caches (Redis) where cache_clear may be called
+    # from a different process than the one that populated the cache.
+    if backend is not None and ttl is not None:
+        backend_instance = _get_backend(package, backend, ttl)
+        cleared = backend_instance.clear(pattern)
+        if cleared > 0:
+            total_cleared += cleared
+            logger.debug(f'Cleared {cleared} entries from {backend} backend (ttl={ttl})')
+    else:
+        with _backends_lock:
+            for (pkg, btype, bttl), backend_instance in list(_backends.items()):
+                if pkg != package:
+                    continue
+                if btype not in backends_to_clear:
+                    continue
+                if ttl is not None and bttl != ttl:
+                    continue
 
-            cleared = backend_instance.clear(pattern)
-            if cleared > 0:
-                total_cleared += cleared
-                logger.debug(f'Cleared {cleared} entries from {btype} backend (ttl={bttl})')
+                cleared = backend_instance.clear(pattern)
+                if cleared > 0:
+                    total_cleared += cleared
+                    logger.debug(f'Cleared {cleared} entries from {btype} backend (ttl={bttl})')
 
     return total_cleared
 

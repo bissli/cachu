@@ -115,7 +115,7 @@ class FileBackend(Backend):
 
                 with dbm.open(self._filepath, 'c') as db:
                     keys_to_delete = [
-                        k for k in db
+                        k for k in db.keys()
                         if fnmatch.fnmatch(k.decode(), pattern)
                     ]
                     for key in keys_to_delete:
@@ -131,7 +131,7 @@ class FileBackend(Backend):
         with self._lock:
             try:
                 with dbm.open(self._filepath, 'c') as db:
-                    all_keys = [k.decode() for k in db]
+                    all_keys = [k.decode() for k in db.keys()]
             except Exception:
                 return
 
