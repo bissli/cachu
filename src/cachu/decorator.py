@@ -39,11 +39,11 @@ def _get_backend(package: str | None, backend_type: str, ttl: int) -> Backend:
             backend = MemoryBackend()
         elif backend_type == 'file':
             if ttl < 60:
-                filename = f'cache{ttl}sec'
+                filename = f'cache{ttl}sec.db'
             elif ttl < 3600:
-                filename = f'cache{ttl // 60}min'
+                filename = f'cache{ttl // 60}min.db'
             else:
-                filename = f'cache{ttl // 3600}hour'
+                filename = f'cache{ttl // 3600}hour.db'
 
             if package:
                 filename = f'{package}_{filename}'
