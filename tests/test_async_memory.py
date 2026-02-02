@@ -1,8 +1,7 @@
 """Test async memory cache backend operations.
 """
-import pytest
-
 import cachu
+import pytest
 
 
 @pytest.fixture(autouse=True)
