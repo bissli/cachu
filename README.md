@@ -52,13 +52,13 @@ cachu.configure(
 
 ### Configuration Options
 
-| Option | Default | Description |
-|--------|---------|-------------|
-| `backend` | `'memory'` | Default backend type |
-| `key_prefix` | `''` | Prefix for all cache keys (useful for versioning) |
-| `file_dir` | `'/tmp'` | Directory for file-based caches |
-| `redis_url` | `'redis://localhost:6379/0'` | Redis connection URL |
-| `redis_distributed` | `False` | Enable distributed locks for Redis |
+| Option              | Default                      | Description                                       |
+| ------------------- | ---------------------------- | ------------------------------------------------- |
+| `backend`           | `'memory'`                   | Default backend type                              |
+| `key_prefix`        | `''`                         | Prefix for all cache keys (useful for versioning) |
+| `file_dir`          | `'/tmp'`                     | Directory for file-based caches                   |
+| `redis_url`         | `'redis://localhost:6379/0'` | Redis connection URL                              |
+| `redis_distributed` | `False`                      | Enable distributed locks for Redis                |
 
 ### Package Isolation
 
@@ -281,12 +281,12 @@ cache_clear()
 
 **Clearing behavior:**
 
-| `ttl` | `tag` | `backend` | Behavior |
-|-------|-------|-----------|----------|
-| `300` | `None` | `'memory'` | All keys in 300s memory region |
-| `300` | `'users'` | `'memory'` | Only "users" tag in 300s memory region |
-| `None` | `None` | `'memory'` | All memory regions |
-| `None` | `'users'` | `None` | "users" tag across all backends |
+| `ttl`  | `tag`     | `backend`  | Behavior                               |
+| ------ | --------- | ---------- | -------------------------------------- |
+| `300`  | `None`    | `'memory'` | All keys in 300s memory region         |
+| `300`  | `'users'` | `'memory'` | Only "users" tag in 300s memory region |
+| `None` | `None`    | `'memory'` | All memory regions                     |
+| `None` | `'users'` | `None`     | "users" tag across all backends        |
 
 ### Cross-Module Clearing
 
@@ -344,6 +344,38 @@ if cachu.is_disabled():
     print("Caching is disabled")
 ```
 
+## Async Support
+
+The library provides full async/await support with matching APIs:
+
+```python
+from cachu import async_cache, async_cache_get, async_cache_set, async_cache_delete
+from cachu import async_cache_clear, async_cache_info
+
+@async_cache(ttl=300, backend='memory')
+async def get_user(user_id: int) -> dict:
+    return await fetch_from_database(user_id)
+
+# Usage
+user = await get_user(123)  # Cache miss
+user = await get_user(123)  # Cache hit
+
+# Per-call control works the same way
+user = await get_user(123, _skip_cache=True)
+user = await get_user(123, _overwrite_cache=True)
+
+# CRUD operations
+cached = await async_cache_get(get_user, user_id=123)
+await async_cache_set(get_user, {'id': 123, 'name': 'Test'}, user_id=123)
+await async_cache_delete(get_user, user_id=123)
+await async_cache_clear(backend='memory', ttl=300)
+
+# Statistics
+info = await async_cache_info(get_user)
+```
+
+All decorator options (`ttl`, `backend`, `tag`, `exclude`, `cache_if`, `validate`, `package`) work identically to the sync version.
+
 ## Advanced
 
 ### Direct Backend Access
@@ -378,25 +410,40 @@ from cachu import (
     enable,
     is_disabled,
 
-    # Decorator
+    # Sync Decorator
     cache,
 
-    # CRUD Operations
+    # Sync CRUD Operations
     cache_get,
     cache_set,
     cache_delete,
     cache_clear,
     cache_info,
 
+    # Async Decorator
+    async_cache,
+
+    # Async CRUD Operations
+    async_cache_get,
+    async_cache_set,
+    async_cache_delete,
+    async_cache_clear,
+    async_cache_info,
+
     # Advanced
     get_backend,
+    get_async_backend,
     get_redis_client,
+    Backend,
+    AsyncBackend,
+    clear_async_backends,
 )
 ```
 
 ## Features
 
-- **Multiple backends**: Memory, file (DBM), and Redis
+- **Multiple backends**: Memory, file (SQLite), and Redis
+- **Async support**: Full async/await API with `@async_cache` decorator
 - **Flexible TTL**: Configure different TTLs for different use cases
 - **Tags**: Organize and selectively clear cache entries
 - **Package isolation**: Each package gets isolated configuration
