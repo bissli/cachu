@@ -1,7 +1,7 @@
 [project]
 name = "cachu"
 version = "0.1.3"
-description = "Flexible caching library built on dogpile.cache"
+description = "Flexible caching library with sync and async support for memory, file (SQLite), and Redis backends"
 readme = "README.md"
 license = "0BSD"
 authors = [{ name = "bissli" }]
@@ -12,12 +12,15 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-redis = ["redis"]
+async = ["aiosqlite"]
+redis = ["redis>=4.2.0"]
 test = [
     "pytest",
+    "pytest-asyncio",
     "pytest-mock",
-    "redis",
+    "redis>=4.2.0",
     "testcontainers[redis]",
+    "aiosqlite",
 ]
 
 [project.urls]
@@ -31,6 +34,7 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
+asyncio_mode = "auto"
 markers = [
   "redis: marks tests requiring Redis (deselect with '-m \"not redis\"')",
   "slow: marks tests as slow (deselect with '-m \"not slow\"')",
