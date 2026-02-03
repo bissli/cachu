@@ -6,7 +6,7 @@ from typing import Any
 
 from .backends import NO_VALUE
 from .config import _get_caller_package, get_config
-from .decorator import _get_backend, get_cache_info
+from .decorator import _get_backend, _stats, _stats_lock, get_cache_info
 from .keys import mangle_key
 from .types import CacheInfo, CacheMeta
 
@@ -162,6 +162,9 @@ def cache_clear(
                 if cleared > 0:
                     total_cleared += cleared
                     logger.debug(f'Cleared {cleared} entries from {btype} backend (ttl={bttl})')
+
+    with _stats_lock:
+        _stats.clear()
 
     return total_cleared
 
