@@ -2,11 +2,10 @@
 """
 import tempfile
 
-import pytest
-
 import cachu
-from cachu.backends.async_sqlite import AsyncSqliteBackend
+import pytest
 from cachu.backends import NO_VALUE
+from cachu.backends.sqlite import AsyncSqliteBackend
 
 
 @pytest.fixture(autouse=True)
@@ -103,9 +102,7 @@ async def test_async_sqlite_backend_keys(async_sqlite_backend):
     await async_sqlite_backend.set('key1', 'value1', 300)
     await async_sqlite_backend.set('key2', 'value2', 300)
 
-    keys = []
-    async for key in async_sqlite_backend.keys():
-        keys.append(key)
+    keys = [key async for key in async_sqlite_backend]
 
     assert set(keys) == {'key1', 'key2'}
 
@@ -117,9 +114,7 @@ async def test_async_sqlite_backend_keys_pattern(async_sqlite_backend):
     await async_sqlite_backend.set('user:2', 'value2', 300)
     await async_sqlite_backend.set('other:1', 'value3', 300)
 
-    keys = []
-    async for key in async_sqlite_backend.keys('user:*'):
-        keys.append(key)
+    keys = [key async for key in async_sqlite_backend.keys('user:*')]
 
     assert set(keys) == {'user:1', 'user:2'}
 

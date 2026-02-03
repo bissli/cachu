@@ -6,8 +6,8 @@ that can cause confusion when using get_async_backend() without matching TTL.
 """
 import cachu
 import pytest
-from cachu.async_decorator import _get_async_backend, get_async_backend
-from cachu.decorator import _get_backend, clear_backends, get_backend
+from cachu.decorator import async_manager, clear_backends, get_async_backend
+from cachu.decorator import get_backend, manager
 
 
 @pytest.fixture(autouse=True)
@@ -31,8 +31,8 @@ def clear_sync_backends():
 async def test_different_ttl_creates_separate_backends_memory(temp_cache_dir):
     """Verify different TTLs create separate memory backend instances.
     """
-    backend_5min = await _get_async_backend(None, 'memory', 300)
-    backend_24h = await _get_async_backend(None, 'memory', 86400)
+    backend_5min = await async_manager.get_backend(None, 'memory', 300)
+    backend_24h = await async_manager.get_backend(None, 'memory', 86400)
 
     assert backend_5min is not backend_24h
 
@@ -40,8 +40,8 @@ async def test_different_ttl_creates_separate_backends_memory(temp_cache_dir):
 async def test_same_ttl_reuses_backend(temp_cache_dir):
     """Verify same TTL reuses the same backend instance.
     """
-    backend1 = await _get_async_backend(None, 'memory', 300)
-    backend2 = await _get_async_backend(None, 'memory', 300)
+    backend1 = await async_manager.get_backend(None, 'memory', 300)
+    backend2 = await async_manager.get_backend(None, 'memory', 300)
 
     assert backend1 is backend2
 
@@ -49,29 +49,29 @@ async def test_same_ttl_reuses_backend(temp_cache_dir):
 async def test_ttl_to_filename_seconds(temp_cache_dir):
     """Verify TTL < 60s maps to cache{ttl}sec.db filename.
     """
-    backend = await _get_async_backend(None, 'file', 30)
+    backend = await async_manager.get_backend(None, 'file', 30)
     assert 'cache30sec.db' in backend._filepath
 
 
 async def test_ttl_to_filename_minutes(temp_cache_dir):
     """Verify TTL 60-3599s maps to cache{minutes}min.db filename.
     """
-    backend = await _get_async_backend(None, 'file', 300)
+    backend = await async_manager.get_backend(None, 'file', 300)
     assert 'cache5min.db' in backend._filepath
 
 
 async def test_ttl_to_filename_hours(temp_cache_dir):
     """Verify TTL >= 3600s maps to cache{hours}hour.db filename.
     """
-    backend = await _get_async_backend(None, 'file', 86400)
+    backend = await async_manager.get_backend(None, 'file', 86400)
     assert 'cache24hour.db' in backend._filepath
 
 
 async def test_different_ttl_uses_different_files(temp_cache_dir):
     """Verify different TTLs create backends with different database files.
     """
-    backend_5min = await _get_async_backend(None, 'file', 300)
-    backend_24h = await _get_async_backend(None, 'file', 86400)
+    backend_5min = await async_manager.get_backend(None, 'file', 300)
+    backend_24h = await async_manager.get_backend(None, 'file', 86400)
 
     assert backend_5min._filepath != backend_24h._filepath
     assert 'cache5min.db' in backend_5min._filepath
@@ -85,11 +85,11 @@ async def test_count_returns_zero_with_wrong_ttl(temp_cache_dir):
     caching with ttl=86400 but querying count with ttl=300 returns 0
     because they use different database files.
     """
-    backend_cache = await _get_async_backend(None, 'file', 86400)
+    backend_cache = await async_manager.get_backend(None, 'file', 86400)
     await backend_cache.set('key1', 'value1', 86400)
     await backend_cache.set('key2', 'value2', 86400)
 
-    backend_query = await _get_async_backend(None, 'file', 300)
+    backend_query = await async_manager.get_backend(None, 'file', 300)
     wrong_ttl_count = await backend_query.count()
 
     correct_ttl_count = await backend_cache.count()
@@ -142,8 +142,8 @@ async def test_decorator_and_get_backend_must_match_ttl(temp_cache_dir):
 def test_sync_different_ttl_creates_separate_backends_memory(temp_cache_dir):
     """Verify different TTLs create separate memory backend instances.
     """
-    backend_5min = _get_backend(None, 'memory', 300)
-    backend_24h = _get_backend(None, 'memory', 86400)
+    backend_5min = manager.get_backend(None, 'memory', 300)
+    backend_24h = manager.get_backend(None, 'memory', 86400)
 
     assert backend_5min is not backend_24h
 
@@ -151,8 +151,8 @@ def test_sync_different_ttl_creates_separate_backends_memory(temp_cache_dir):
 def test_sync_same_ttl_reuses_backend(temp_cache_dir):
     """Verify same TTL reuses the same backend instance.
     """
-    backend1 = _get_backend(None, 'memory', 300)
-    backend2 = _get_backend(None, 'memory', 300)
+    backend1 = manager.get_backend(None, 'memory', 300)
+    backend2 = manager.get_backend(None, 'memory', 300)
 
     assert backend1 is backend2
 
@@ -160,29 +160,29 @@ def test_sync_same_ttl_reuses_backend(temp_cache_dir):
 def test_sync_ttl_to_filename_seconds(temp_cache_dir):
     """Verify TTL < 60s maps to cache{ttl}sec.db filename.
     """
-    backend = _get_backend(None, 'file', 30)
+    backend = manager.get_backend(None, 'file', 30)
     assert 'cache30sec.db' in backend._filepath
 
 
 def test_sync_ttl_to_filename_minutes(temp_cache_dir):
     """Verify TTL 60-3599s maps to cache{minutes}min.db filename.
     """
-    backend = _get_backend(None, 'file', 300)
+    backend = manager.get_backend(None, 'file', 300)
     assert 'cache5min.db' in backend._filepath
 
 
 def test_sync_ttl_to_filename_hours(temp_cache_dir):
     """Verify TTL >= 3600s maps to cache{hours}hour.db filename.
     """
-    backend = _get_backend(None, 'file', 86400)
+    backend = manager.get_backend(None, 'file', 86400)
     assert 'cache24hour.db' in backend._filepath
 
 
 def test_sync_different_ttl_uses_different_files(temp_cache_dir):
     """Verify different TTLs create backends with different database files.
     """
-    backend_5min = _get_backend(None, 'file', 300)
-    backend_24h = _get_backend(None, 'file', 86400)
+    backend_5min = manager.get_backend(None, 'file', 300)
+    backend_24h = manager.get_backend(None, 'file', 86400)
 
     assert backend_5min._filepath != backend_24h._filepath
     assert 'cache5min.db' in backend_5min._filepath
@@ -192,11 +192,11 @@ def test_sync_different_ttl_uses_different_files(temp_cache_dir):
 def test_sync_count_returns_zero_with_wrong_ttl(temp_cache_dir):
     """Document gotcha: count() returns 0 when querying with wrong TTL.
     """
-    backend_cache = _get_backend(None, 'file', 86400)
+    backend_cache = manager.get_backend(None, 'file', 86400)
     backend_cache.set('key1', 'value1', 86400)
     backend_cache.set('key2', 'value2', 86400)
 
-    backend_query = _get_backend(None, 'file', 300)
+    backend_query = manager.get_backend(None, 'file', 300)
     wrong_ttl_count = backend_query.count()
 
     correct_ttl_count = backend_cache.count()

@@ -1,67 +1,206 @@
-"""Cache decorator implementation.
+"""Cache decorator implementation with sync and async support.
 """
+import asyncio
 import logging
 import os
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from functools import wraps
 from typing import Any
 
-from .backends import NO_VALUE, Backend
+from .backends import NO_VALUE, AsyncBackend, Backend
 from .backends.file import FileBackend
-from .backends.memory import MemoryBackend
+from .backends.memory import AsyncMemoryBackend, MemoryBackend
 from .config import _get_caller_package, get_config, is_disabled
 from .keys import make_key_generator, mangle_key
 from .types import CacheEntry, CacheInfo, CacheMeta
 
 logger = logging.getLogger(__name__)
 
-_backends: dict[tuple[str | None, str, int], Backend] = {}
-_backends_lock = threading.Lock()
 
-_stats: dict[int, tuple[int, int]] = {}
-_stats_lock = threading.Lock()
-
-
-def _get_backend(package: str | None, backend_type: str, ttl: int) -> Backend:
-    """Get or create a backend instance.
+class CacheManager:
+    """Manages sync cache backends and statistics.
     """
-    key = (package, backend_type, ttl)
 
-    with _backends_lock:
-        if key in _backends:
-            return _backends[key]
+    def __init__(self) -> None:
+        self.backends: dict[tuple[str | None, str, int], Backend] = {}
+        self.stats: dict[int, tuple[int, int]] = {}
+        self._backends_lock = threading.Lock()
+        self._stats_lock = threading.Lock()
 
-        cfg = get_config(package)
+    def get_backend(self, package: str | None, backend_type: str, ttl: int) -> Backend:
+        """Get or create a backend instance.
+        """
+        key = (package, backend_type, ttl)
 
-        if backend_type == 'memory':
-            backend = MemoryBackend()
-        elif backend_type == 'file':
-            if ttl < 60:
-                filename = f'cache{ttl}sec.db'
-            elif ttl < 3600:
-                filename = f'cache{ttl // 60}min.db'
+        with self._backends_lock:
+            if key in self.backends:
+                return self.backends[key]
+
+            cfg = get_config(package)
+
+            if backend_type == 'memory':
+                backend = MemoryBackend()
+            elif backend_type == 'file':
+                if ttl < 60:
+                    filename = f'cache{ttl}sec.db'
+                elif ttl < 3600:
+                    filename = f'cache{ttl // 60}min.db'
+                else:
+                    filename = f'cache{ttl // 3600}hour.db'
+
+                if package:
+                    filename = f'{package}_{filename}'
+
+                filepath = os.path.join(cfg.file_dir, filename)
+                backend = FileBackend(filepath)
+            elif backend_type == 'redis':
+                from .backends.redis import RedisBackend
+                backend = RedisBackend(cfg.redis_url)
             else:
-                filename = f'cache{ttl // 3600}hour.db'
+                raise ValueError(f'Unknown backend type: {backend_type}')
 
-            if package:
-                filename = f'{package}_{filename}'
+            self.backends[key] = backend
+            logger.debug(f"Created {backend_type} backend for package '{package}', {ttl}s TTL")
+            return backend
 
-            filepath = os.path.join(cfg.file_dir, filename)
-            backend = FileBackend(filepath)
-        elif backend_type == 'redis':
-            from .backends.redis import RedisBackend
-            backend = RedisBackend(cfg.redis_url, cfg.redis_distributed)
-        else:
-            raise ValueError(f'Unknown backend type: {backend_type}')
+    def record_hit(self, fn: Callable[..., Any]) -> None:
+        """Record a cache hit for the function.
+        """
+        fn_id = id(fn)
+        with self._stats_lock:
+            hits, misses = self.stats.get(fn_id, (0, 0))
+            self.stats[fn_id] = (hits + 1, misses)
 
-        _backends[key] = backend
-        logger.debug(f"Created {backend_type} backend for package '{package}', {ttl}s TTL")
-        return backend
+    def record_miss(self, fn: Callable[..., Any]) -> None:
+        """Record a cache miss for the function.
+        """
+        fn_id = id(fn)
+        with self._stats_lock:
+            hits, misses = self.stats.get(fn_id, (0, 0))
+            self.stats[fn_id] = (hits, misses + 1)
+
+    def get_stats(self, fn: Callable[..., Any]) -> tuple[int, int]:
+        """Get (hits, misses) for a function.
+        """
+        fn_id = id(fn)
+        with self._stats_lock:
+            return self.stats.get(fn_id, (0, 0))
+
+    def clear(self, package: str | None = None) -> None:
+        """Clear backend instances for a package.
+        """
+        with self._backends_lock:
+            if package is None:
+                self.backends.clear()
+            else:
+                keys_to_delete = [k for k in self.backends if k[0] == package]
+                for key in keys_to_delete:
+                    del self.backends[key]
 
 
-def get_backend(backend_type: str | None = None, package: str | None = None, *, ttl: int) -> Backend:
+class AsyncCacheManager:
+    """Manages async cache backends and statistics.
+    """
+
+    def __init__(self) -> None:
+        self.backends: dict[tuple[str | None, str, int], AsyncBackend] = {}
+        self.stats: dict[int, tuple[int, int]] = {}
+        self._backends_lock = asyncio.Lock()
+        self._stats_lock = asyncio.Lock()
+
+    async def get_backend(
+        self,
+        package: str | None,
+        backend_type: str,
+        ttl: int,
+    ) -> AsyncBackend:
+        """Get or create an async backend instance.
+        """
+        key = (package, backend_type, ttl)
+
+        async with self._backends_lock:
+            if key in self.backends:
+                return self.backends[key]
+
+            cfg = get_config(package)
+
+            if backend_type == 'memory':
+                backend: AsyncBackend = AsyncMemoryBackend()
+            elif backend_type == 'file':
+                from .backends.sqlite import AsyncSqliteBackend
+
+                if ttl < 60:
+                    filename = f'cache{ttl}sec.db'
+                elif ttl < 3600:
+                    filename = f'cache{ttl // 60}min.db'
+                else:
+                    filename = f'cache{ttl // 3600}hour.db'
+
+                if package:
+                    filename = f'{package}_{filename}'
+
+                filepath = os.path.join(cfg.file_dir, filename)
+                backend = AsyncSqliteBackend(filepath)
+            elif backend_type == 'redis':
+                from .backends.redis import AsyncRedisBackend
+                backend = AsyncRedisBackend(cfg.redis_url)
+            else:
+                raise ValueError(f'Unknown backend type: {backend_type}')
+
+            self.backends[key] = backend
+            logger.debug(f"Created async {backend_type} backend for package '{package}', {ttl}s TTL")
+            return backend
+
+    async def record_hit(self, fn: Callable[..., Any]) -> None:
+        """Record a cache hit for the async function.
+        """
+        fn_id = id(fn)
+        async with self._stats_lock:
+            hits, misses = self.stats.get(fn_id, (0, 0))
+            self.stats[fn_id] = (hits + 1, misses)
+
+    async def record_miss(self, fn: Callable[..., Any]) -> None:
+        """Record a cache miss for the async function.
+        """
+        fn_id = id(fn)
+        async with self._stats_lock:
+            hits, misses = self.stats.get(fn_id, (0, 0))
+            self.stats[fn_id] = (hits, misses + 1)
+
+    async def get_stats(self, fn: Callable[..., Any]) -> tuple[int, int]:
+        """Get (hits, misses) for a function.
+        """
+        fn_id = id(fn)
+        async with self._stats_lock:
+            return self.stats.get(fn_id, (0, 0))
+
+    async def clear(self, package: str | None = None) -> None:
+        """Clear backend instances, calling close() on each.
+        """
+        async with self._backends_lock:
+            if package is None:
+                for backend in self.backends.values():
+                    await backend.close()
+                self.backends.clear()
+            else:
+                keys_to_delete = [k for k in self.backends if k[0] == package]
+                for key in keys_to_delete:
+                    await self.backends[key].close()
+                    del self.backends[key]
+
+
+manager = CacheManager()
+async_manager = AsyncCacheManager()
+
+
+def get_backend(
+    backend_type: str | None = None,
+    package: str | None = None,
+    *,
+    ttl: int,
+) -> Backend:
     """Get a backend instance.
 
     Args:
@@ -76,7 +215,30 @@ def get_backend(backend_type: str | None = None, package: str | None = None, *, 
         cfg = get_config(package)
         backend_type = cfg.backend
 
-    return _get_backend(package, backend_type, ttl)
+    return manager.get_backend(package, backend_type, ttl)
+
+
+async def get_async_backend(
+    backend_type: str | None = None,
+    package: str | None = None,
+    *,
+    ttl: int,
+) -> AsyncBackend:
+    """Get an async backend instance.
+
+    Args:
+        backend_type: 'memory', 'file', or 'redis'. Uses config default if None.
+        package: Package name. Auto-detected if None.
+        ttl: TTL in seconds (used for backend separation).
+    """
+    if package is None:
+        package = _get_caller_package()
+
+    if backend_type is None:
+        cfg = get_config(package)
+        backend_type = cfg.backend
+
+    return await async_manager.get_backend(package, backend_type, ttl)
 
 
 def cache(
@@ -149,7 +311,7 @@ def cache(
             if is_disabled() or skip_cache:
                 return fn(*args, **kwargs)
 
-            backend_instance = _get_backend(resolved_package, resolved_backend, ttl)
+            backend_instance = manager.get_backend(resolved_package, resolved_backend, ttl)
             cfg = get_config(resolved_package)
 
             base_key = key_generator(*args, **kwargs)
@@ -168,13 +330,13 @@ def cache(
                         if not validate(entry):
                             logger.debug(f'Cache validation failed for {fn.__name__}')
                         else:
-                            _record_hit(wrapper)
+                            manager.record_hit(wrapper)
                             return value
                     else:
-                        _record_hit(wrapper)
+                        manager.record_hit(wrapper)
                         return value
 
-            _record_miss(wrapper)
+            manager.record_miss(wrapper)
             result = fn(*args, **kwargs)
 
             should_cache = cache_if is None or cache_if(result)
@@ -193,22 +355,122 @@ def cache(
     return decorator
 
 
-def _record_hit(fn: Callable[..., Any]) -> None:
-    """Record a cache hit for the function.
-    """
-    fn_id = id(fn)
-    with _stats_lock:
-        hits, misses = _stats.get(fn_id, (0, 0))
-        _stats[fn_id] = (hits + 1, misses)
+def async_cache(
+    ttl: int = 300,
+    backend: str | None = None,
+    tag: str = '',
+    exclude: set[str] | None = None,
+    cache_if: Callable[[Any], bool] | None = None,
+    validate: Callable[[CacheEntry], bool] | None = None,
+    package: str | None = None,
+) -> Callable[[Callable[..., Awaitable[Any]]], Callable[..., Awaitable[Any]]]:
+    """Async cache decorator with configurable backend and behavior.
 
+    Args:
+        ttl: Time-to-live in seconds (default: 300)
+        backend: Backend type ('memory', 'file', 'redis'). Uses config default if None.
+        tag: Tag for grouping related cache entries
+        exclude: Parameter names to exclude from cache key
+        cache_if: Function to determine if result should be cached.
+                  Called with result value, caches if returns True.
+        validate: Function to validate cached entries before returning.
+                  Called with CacheEntry, returns False to recompute.
+        package: Package name for config isolation. Auto-detected if None.
 
-def _record_miss(fn: Callable[..., Any]) -> None:
-    """Record a cache miss for the function.
+    Per-call control via reserved kwargs (not passed to function):
+        _skip_cache: If True, bypass cache completely for this call
+        _overwrite_cache: If True, execute function and overwrite cached value
+
+    Example:
+        @async_cache(ttl=300, tag='users')
+        async def get_user(user_id: int) -> dict:
+            return await fetch_user(user_id)
+
+        # Normal call
+        user = await get_user(123)
+
+        # Skip cache
+        user = await get_user(123, _skip_cache=True)
+
+        # Force refresh
+        user = await get_user(123, _overwrite_cache=True)
     """
-    fn_id = id(fn)
-    with _stats_lock:
-        hits, misses = _stats.get(fn_id, (0, 0))
-        _stats[fn_id] = (hits, misses + 1)
+    resolved_package = package if package is not None else _get_caller_package()
+
+    if backend is None:
+        cfg = get_config(resolved_package)
+        resolved_backend = cfg.backend
+    else:
+        resolved_backend = backend
+
+    def decorator(fn: Callable[..., Awaitable[Any]]) -> Callable[..., Awaitable[Any]]:
+        key_generator = make_key_generator(fn, tag, exclude)
+
+        meta = CacheMeta(
+            ttl=ttl,
+            backend=resolved_backend,
+            tag=tag,
+            exclude=exclude or set(),
+            cache_if=cache_if,
+            validate=validate,
+            package=resolved_package,
+            key_generator=key_generator,
+        )
+
+        @wraps(fn)
+        async def wrapper(*args: Any, **kwargs: Any) -> Any:
+            skip_cache = kwargs.pop('_skip_cache', False)
+            overwrite_cache = kwargs.pop('_overwrite_cache', False)
+
+            if is_disabled() or skip_cache:
+                return await fn(*args, **kwargs)
+
+            backend_instance = await async_manager.get_backend(
+                resolved_package,
+                resolved_backend,
+                ttl,
+            )
+            cfg = get_config(resolved_package)
+
+            base_key = key_generator(*args, **kwargs)
+            cache_key = mangle_key(base_key, cfg.key_prefix, ttl)
+
+            if not overwrite_cache:
+                value, created_at = await backend_instance.get_with_metadata(cache_key)
+
+                if value is not NO_VALUE:
+                    if validate is not None and created_at is not None:
+                        entry = CacheEntry(
+                            value=value,
+                            created_at=created_at,
+                            age=time.time() - created_at,
+                        )
+                        if not validate(entry):
+                            logger.debug(f'Cache validation failed for {fn.__name__}')
+                        else:
+                            await async_manager.record_hit(wrapper)
+                            return value
+                    else:
+                        await async_manager.record_hit(wrapper)
+                        return value
+
+            await async_manager.record_miss(wrapper)
+            result = await fn(*args, **kwargs)
+
+            should_cache = cache_if is None or cache_if(result)
+
+            if should_cache:
+                await backend_instance.set(cache_key, result, ttl)
+                logger.debug(f'Cached {fn.__name__} with key {cache_key}')
+
+            return result
+
+        wrapper._cache_meta = meta  # type: ignore
+        wrapper._cache_key_generator = key_generator  # type: ignore
+
+        return wrapper
+
+    return decorator
 
 
 def get_cache_info(fn: Callable[..., Any]) -> CacheInfo:
@@ -220,16 +482,13 @@ def get_cache_info(fn: Callable[..., Any]) -> CacheInfo:
     Returns
         CacheInfo with hits, misses, and currsize
     """
-    fn_id = id(fn)
-
-    with _stats_lock:
-        hits, misses = _stats.get(fn_id, (0, 0))
+    hits, misses = manager.get_stats(fn)
 
     meta = getattr(fn, '_cache_meta', None)
     if meta is None:
         return CacheInfo(hits=hits, misses=misses, currsize=0)
 
-    backend_instance = _get_backend(meta.package, meta.backend, meta.ttl)
+    backend_instance = manager.get_backend(meta.package, meta.backend, meta.ttl)
     cfg = get_config(meta.package)
 
     fn_name = getattr(fn, '__wrapped__', fn).__name__
@@ -240,13 +499,39 @@ def get_cache_info(fn: Callable[..., Any]) -> CacheInfo:
     return CacheInfo(hits=hits, misses=misses, currsize=currsize)
 
 
+async def get_async_cache_info(fn: Callable[..., Any]) -> CacheInfo:
+    """Get cache statistics for an async decorated function.
+
+    Args:
+        fn: A function decorated with @async_cache
+
+    Returns
+        CacheInfo with hits, misses, and currsize
+    """
+    hits, misses = await async_manager.get_stats(fn)
+
+    meta = getattr(fn, '_cache_meta', None)
+    if meta is None:
+        return CacheInfo(hits=hits, misses=misses, currsize=0)
+
+    backend_instance = await async_manager.get_backend(meta.package, meta.backend, meta.ttl)
+    cfg = get_config(meta.package)
+
+    fn_name = getattr(fn, '__wrapped__', fn).__name__
+    pattern = f'*:{cfg.key_prefix}{fn_name}|*'
+
+    currsize = await backend_instance.count(pattern)
+
+    return CacheInfo(hits=hits, misses=misses, currsize=currsize)
+
+
 def clear_backends(package: str | None = None) -> None:
     """Clear all backend instances for a package. Primarily for testing.
     """
-    with _backends_lock:
-        if package is None:
-            _backends.clear()
-        else:
-            keys_to_delete = [k for k in _backends if k[0] == package]
-            for key in keys_to_delete:
-                del _backends[key]
+    manager.clear(package)
+
+
+async def clear_async_backends(package: str | None = None) -> None:
+    """Clear all async backend instances for a package. Primarily for testing.
+    """
+    await async_manager.clear(package)

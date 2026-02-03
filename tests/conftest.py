@@ -23,28 +23,27 @@ site.addsitedir(HERE)
 def _clear_all_backends() -> None:
     """Clear all backend instances (internal test helper).
     """
-    from cachu.decorator import _backends, _backends_lock, _stats, _stats_lock
-    from cachu.async_decorator import _async_backends, _async_backends_lock, _async_stats, _async_stats_lock
+    from cachu.decorator import async_manager, manager
 
-    with _backends_lock:
-        for backend in _backends.values():
+    with manager._backends_lock:
+        for backend in manager.backends.values():
             try:
                 backend.clear()
             except Exception:
                 pass
-        _backends.clear()
+        manager.backends.clear()
 
-    with _stats_lock:
-        _stats.clear()
+    with manager._stats_lock:
+        manager.stats.clear()
 
-    for backend in _async_backends.values():
+    for backend in async_manager.backends.values():
         try:
             if hasattr(backend, '_cache'):
                 backend._cache.clear()
         except Exception:
             pass
-    _async_backends.clear()
-    _async_stats.clear()
+    async_manager.backends.clear()
+    async_manager.stats.clear()
 
 
 @pytest.fixture(autouse=True)
@@ -84,7 +83,6 @@ def reset_cache_config(request):
         key_prefix='test:',
         file_dir=tempfile.gettempdir(),
         redis_url=f'redis://{redis_host}:{redis_port}/0',
-        redis_distributed=False,
     )
 
     if is_redis_test:

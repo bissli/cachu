@@ -1,10 +1,9 @@
 """Test async Redis cache backend operations.
 """
-import pytest
-
 import cachu
-from cachu.backends.async_redis import AsyncRedisBackend
+import pytest
 from cachu.backends import NO_VALUE
+from cachu.backends.redis import AsyncRedisBackend
 
 
 @pytest.fixture(autouse=True)
@@ -108,9 +107,7 @@ async def test_async_redis_backend_keys(async_redis_backend):
     await async_redis_backend.set('test:key1', 'value1', 300)
     await async_redis_backend.set('test:key2', 'value2', 300)
 
-    keys = []
-    async for key in async_redis_backend.keys('test:*'):
-        keys.append(key)
+    keys = [key async for key in async_redis_backend.keys('test:*')]
 
     assert set(keys) == {'test:key1', 'test:key2'}
 
