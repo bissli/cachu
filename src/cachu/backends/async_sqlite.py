@@ -48,22 +48,36 @@ class AsyncSqliteBackend(AsyncBackend):
                 await self._connection.execute('PRAGMA busy_timeout=5000')
 
             if not self._initialized:
-                await self._connection.execute('''
+                await self._connection.execute("""
                     CREATE TABLE IF NOT EXISTS cache (
                         key TEXT PRIMARY KEY,
                         value BLOB NOT NULL,
                         created_at REAL NOT NULL,
                         expires_at REAL NOT NULL
                     )
-                ''')
-                await self._connection.execute('''
+                """)
+                await self._connection.execute("""
                     CREATE INDEX IF NOT EXISTS idx_cache_expires
                     ON cache(expires_at)
-                ''')
+                """)
                 await self._connection.commit()
                 self._initialized = True
 
         return self._connection
+
+    def _schedule_delete(self, key: str) -> None:
+        """Schedule a background deletion task (fire-and-forget).
+        """
+        async def _delete() -> None:
+            try:
+                async with self._write_lock:
+                    conn = await self._ensure_initialized()
+                    await conn.execute('DELETE FROM cache WHERE key = ?', (key,))
+                    await conn.commit()
+            except Exception:
+                pass
+
+        asyncio.create_task(_delete())
 
     async def get(self, key: str) -> Any:
         """Get value by key. Returns NO_VALUE if not found or expired.
@@ -81,6 +95,7 @@ class AsyncSqliteBackend(AsyncBackend):
 
             value_blob, expires_at = row
             if time.time() > expires_at:
+                self._schedule_delete(key)
                 return NO_VALUE
 
             return pickle.loads(value_blob)
@@ -103,6 +118,7 @@ class AsyncSqliteBackend(AsyncBackend):
 
             value_blob, created_at, expires_at = row
             if time.time() > expires_at:
+                self._schedule_delete(key)
                 return NO_VALUE, None
 
             return pickle.loads(value_blob), created_at
@@ -118,8 +134,8 @@ class AsyncSqliteBackend(AsyncBackend):
         async with self._write_lock:
             conn = await self._ensure_initialized()
             await conn.execute(
-                '''INSERT OR REPLACE INTO cache (key, value, created_at, expires_at)
-                   VALUES (?, ?, ?, ?)''',
+                """INSERT OR REPLACE INTO cache (key, value, created_at, expires_at)
+                   VALUES (?, ?, ?, ?)""",
                 (key, value_blob, now, now + ttl),
             )
             await conn.commit()
