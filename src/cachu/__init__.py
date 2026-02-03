@@ -1,6 +1,6 @@
 """Flexible caching library with support for memory, file, and Redis backends.
 """
-__version__ = '0.2.0'
+__version__ = '0.2.1'
 
 from .async_decorator import async_cache, clear_async_backends
 from .async_decorator import get_async_backend, get_async_cache_info
