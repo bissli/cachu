@@ -46,19 +46,17 @@ cachu.configure(
     key_prefix='v1:',           # Prefix for all cache keys
     file_dir='/var/cache/app',  # Directory for file cache
     redis_url='redis://localhost:6379/0',  # Redis connection URL
-    redis_distributed=False,    # Use distributed locks for Redis
 )
 ```
 
 ### Configuration Options
 
-| Option              | Default                      | Description                                       |
-| ------------------- | ---------------------------- | ------------------------------------------------- |
-| `backend`           | `'memory'`                   | Default backend type                              |
-| `key_prefix`        | `''`                         | Prefix for all cache keys (useful for versioning) |
-| `file_dir`          | `'/tmp'`                     | Directory for file-based caches                   |
-| `redis_url`         | `'redis://localhost:6379/0'` | Redis connection URL                              |
-| `redis_distributed` | `False`                      | Enable distributed locks for Redis                |
+| Option       | Default                      | Description                                       |
+| ------------ | ---------------------------- | ------------------------------------------------- |
+| `backend`    | `'memory'`                   | Default backend type                              |
+| `key_prefix` | `''`                         | Prefix for all cache keys (useful for versioning) |
+| `file_dir`   | `'/tmp'`                     | Directory for file-based caches                   |
+| `redis_url`  | `'redis://localhost:6379/0'` | Redis connection URL                              |
 
 ### Package Isolation
 

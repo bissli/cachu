@@ -27,13 +27,9 @@ def test_configure_updates_settings(tmp_path):
 def test_configure_redis_settings():
     """Verify Redis-specific configuration can be updated.
     """
-    cachu.configure(
-        redis_url='redis://redis.example.com:6380/1',
-        redis_distributed=True,
-    )
+    cachu.configure(redis_url='redis://redis.example.com:6380/1')
     cfg = cachu.get_config()
     assert cfg.redis_url == 'redis://redis.example.com:6380/1'
-    assert cfg.redis_distributed is True
 
 
 def test_configure_backend_setting():

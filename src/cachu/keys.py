@@ -35,6 +35,14 @@ def _normalize_tag(tag: str) -> str:
     return f'|{tag}|'
 
 
+def _tag_to_pattern(tag: str | None) -> str | None:
+    """Convert tag to cache key pattern for clearing.
+    """
+    if not tag:
+        return None
+    return f'*{_normalize_tag(tag)}*'
+
+
 def make_key_generator(
     fn: Callable[..., Any],
     tag: str = '',
