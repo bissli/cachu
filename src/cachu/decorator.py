@@ -4,9 +4,9 @@ import logging
 import os
 import threading
 import time
+from collections.abc import Callable
 from functools import wraps
 from typing import Any
-from collections.abc import Callable
 
 from .backends import NO_VALUE, Backend
 from .backends.file import FileBackend
@@ -61,7 +61,7 @@ def _get_backend(package: str | None, backend_type: str, ttl: int) -> Backend:
         return backend
 
 
-def get_backend(backend_type: str | None = None, package: str | None = None, ttl: int = 300) -> Backend:
+def get_backend(backend_type: str | None = None, package: str | None = None, *, ttl: int) -> Backend:
     """Get a backend instance.
 
     Args:

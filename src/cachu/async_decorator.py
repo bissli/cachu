@@ -66,7 +66,8 @@ async def _get_async_backend(package: str | None, backend_type: str, ttl: int) -
 async def get_async_backend(
     backend_type: str | None = None,
     package: str | None = None,
-    ttl: int = 300,
+    *,
+    ttl: int,
 ) -> AsyncBackend:
     """Get an async backend instance.
 
