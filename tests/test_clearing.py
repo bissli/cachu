@@ -172,3 +172,48 @@ def test_cache_clear_creates_backend_and_clears(temp_cache_dir):
     # Data should have been cleared (verify by getting a fresh backend)
     backend = _get_backend(package, 'file', 888)
     assert backend.get('14m:test_func||file_tag||x=1') is NO_VALUE
+
+
+def test_cache_clear_resets_stats():
+    """Verify cache_clear resets hit/miss statistics.
+    """
+    @cachu.cache(ttl=300, backend='memory')
+    def func(x: int) -> int:
+        return x * 2
+
+    func(1)
+    func(1)
+    func(2)
+
+    info = cachu.cache_info(func)
+    assert info.hits == 1
+    assert info.misses == 2
+
+    cachu.cache_clear(backend='memory', ttl=300)
+
+    info = cachu.cache_info(func)
+    assert info.hits == 0
+    assert info.misses == 0
+
+
+@pytest.mark.asyncio
+async def test_async_cache_clear_resets_stats():
+    """Verify async_cache_clear resets hit/miss statistics.
+    """
+    @cachu.async_cache(ttl=300, backend='memory')
+    async def func(x: int) -> int:
+        return x * 2
+
+    await func(1)
+    await func(1)
+    await func(2)
+
+    info = await cachu.async_cache_info(func)
+    assert info.hits == 1
+    assert info.misses == 2
+
+    await cachu.async_cache_clear(backend='memory', ttl=300)
+
+    info = await cachu.async_cache_info(func)
+    assert info.hits == 0
+    assert info.misses == 0

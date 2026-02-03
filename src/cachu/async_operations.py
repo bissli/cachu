@@ -7,7 +7,7 @@ from typing import Any
 from .backends import NO_VALUE
 from .config import _get_caller_package, get_config
 from .async_decorator import _get_async_backend, get_async_cache_info
-from .async_decorator import _async_backends, _async_backends_lock
+from .async_decorator import _async_backends, _async_backends_lock, _async_stats, _async_stats_lock
 from .keys import mangle_key
 from .types import CacheInfo, CacheMeta
 
@@ -158,6 +158,9 @@ async def async_cache_clear(
                 if cleared > 0:
                     total_cleared += cleared
                     logger.debug(f'Cleared {cleared} entries from {btype} backend (ttl={bttl})')
+
+    async with _async_stats_lock:
+        _async_stats.clear()
 
     return total_cleared
 

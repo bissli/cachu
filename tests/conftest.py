@@ -24,6 +24,7 @@ def _clear_all_backends() -> None:
     """Clear all backend instances (internal test helper).
     """
     from cachu.decorator import _backends, _backends_lock, _stats, _stats_lock
+    from cachu.async_decorator import _async_backends, _async_backends_lock, _async_stats, _async_stats_lock
 
     with _backends_lock:
         for backend in _backends.values():
@@ -35,6 +36,15 @@ def _clear_all_backends() -> None:
 
     with _stats_lock:
         _stats.clear()
+
+    for backend in _async_backends.values():
+        try:
+            if hasattr(backend, '_cache'):
+                backend._cache.clear()
+        except Exception:
+            pass
+    _async_backends.clear()
+    _async_stats.clear()
 
 
 @pytest.fixture(autouse=True)
