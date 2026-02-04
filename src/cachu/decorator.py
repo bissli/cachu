@@ -165,7 +165,7 @@ def get_backend(
 
     if backend_type is None:
         cfg = get_config(package)
-        backend_type = cfg.backend
+        backend_type = cfg.backend_default
 
     return manager.get_backend(package, backend_type, ttl)
 
@@ -188,7 +188,7 @@ async def aget_backend(
 
     if backend_type is None:
         cfg = get_config(package)
-        backend_type = cfg.backend
+        backend_type = cfg.backend_default
 
     return await manager.aget_backend(package, backend_type, ttl)
 
@@ -362,7 +362,7 @@ def cache(
 
     if backend is None:
         cfg = get_config(resolved_package)
-        resolved_backend = cfg.backend
+        resolved_backend = cfg.backend_default
     else:
         resolved_backend = backend
 

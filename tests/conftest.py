@@ -74,7 +74,7 @@ def reset_cache_config(request):
         redis_port = redis_test_config.port
 
     _registry._default = CacheConfig(
-        backend='memory',
+        backend_default='memory',
         key_prefix='test:',
         file_dir=tempfile.gettempdir(),
         redis_url=f'redis://{redis_host}:{redis_port}/0',

@@ -37,17 +37,17 @@ class TestConfigRegistry:
         cfg = registry.get_config(package='unknown')
 
         assert cfg.key_prefix == ''
-        assert cfg.backend == 'memory'
+        assert cfg.backend_default == 'memory'
 
     def test_registry_get_config_returns_configured_for_known_package(self):
         """Verify get_config returns correct config for configured package."""
         registry = ConfigRegistry()
-        registry.configure(package='pkg1', key_prefix='v1:', backend='file')
+        registry.configure(package='pkg1', key_prefix='v1:', backend_default='file')
 
         cfg = registry.get_config(package='pkg1')
 
         assert cfg.key_prefix == 'v1:'
-        assert cfg.backend == 'file'
+        assert cfg.backend_default == 'file'
 
     def test_registry_get_all_packages(self):
         """Verify get_all_packages returns all configured packages."""
@@ -76,12 +76,12 @@ class TestGetConfig:
 
     def test_get_config_returns_configured_values(self):
         """Verify get_config returns config for caller's package."""
-        cachu.configure(key_prefix='test:', backend='memory')
+        cachu.configure(key_prefix='test:', backend_default='memory')
 
         cfg = cachu.get_config()
 
         assert cfg.key_prefix == 'test:'
-        assert cfg.backend == 'memory'
+        assert cfg.backend_default == 'memory'
 
     def test_get_config_with_explicit_package(self):
         """Verify get_config can retrieve config for explicit package."""

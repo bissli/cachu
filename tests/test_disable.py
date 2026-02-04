@@ -8,7 +8,7 @@ def test_get_all_configs_returns_default():
     """
     configs = cachu.get_all_configs()
     assert '_default' in configs
-    assert 'backend' in configs['_default']
+    assert 'backend_default' in configs['_default']
     assert 'key_prefix' in configs['_default']
     assert 'redis_url' in configs['_default']
 
