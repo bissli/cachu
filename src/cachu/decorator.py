@@ -27,10 +27,8 @@ class CacheManager:
 
     def __init__(self) -> None:
         self.backends: dict[tuple[str | None, str, int], Backend] = {}
-        self.stats: dict[int, tuple[int, int]] = {}
         self._sync_lock = threading.Lock()
         self._async_lock = asyncio.Lock()
-        self._stats_lock = threading.Lock()
 
     def _create_backend(
         self,
@@ -91,29 +89,6 @@ class CacheManager:
             if key not in self.backends:
                 self.backends[key] = self._create_backend(package, backend_type, ttl)
             return self.backends[key]
-
-    def record_hit(self, fn: Callable[..., Any]) -> None:
-        """Record a cache hit for the function.
-        """
-        fn_id = id(fn)
-        with self._stats_lock:
-            hits, misses = self.stats.get(fn_id, (0, 0))
-            self.stats[fn_id] = (hits + 1, misses)
-
-    def record_miss(self, fn: Callable[..., Any]) -> None:
-        """Record a cache miss for the function.
-        """
-        fn_id = id(fn)
-        with self._stats_lock:
-            hits, misses = self.stats.get(fn_id, (0, 0))
-            self.stats[fn_id] = (hits, misses + 1)
-
-    def get_stats(self, fn: Callable[..., Any]) -> tuple[int, int]:
-        """Get (hits, misses) for a function.
-        """
-        fn_id = id(fn)
-        with self._stats_lock:
-            return self.stats.get(fn_id, (0, 0))
 
     def clear(self, package: str | None = None) -> None:
         """Clear backend instances (sync).
@@ -404,7 +379,7 @@ def cache(
                     value, created_at = await backend_inst.aget_with_metadata(cache_key)
 
                     if value is not NO_VALUE and _validate_entry(value, created_at, validate):
-                        manager.record_hit(async_wrapper)
+                        await backend_inst.aincr_stat(fn.__name__, 'hits')
                         return value
 
                 mutex = backend_inst.get_async_mutex(cache_key)
@@ -413,10 +388,10 @@ def cache(
                     if not overwrite_cache:
                         value, created_at = await backend_inst.aget_with_metadata(cache_key)
                         if value is not NO_VALUE and _validate_entry(value, created_at, validate):
-                            manager.record_hit(async_wrapper)
+                            await backend_inst.aincr_stat(fn.__name__, 'hits')
                             return value
 
-                    manager.record_miss(async_wrapper)
+                    await backend_inst.aincr_stat(fn.__name__, 'misses')
                     result = await fn(*args, **kwargs)
 
                     if cache_if is None or cache_if(result):
@@ -453,7 +428,7 @@ def cache(
                     value, created_at = backend_inst.get_with_metadata(cache_key)
 
                     if value is not NO_VALUE and _validate_entry(value, created_at, validate):
-                        manager.record_hit(sync_wrapper)
+                        backend_inst.incr_stat(fn.__name__, 'hits')
                         return value
 
                 mutex = backend_inst.get_mutex(cache_key)
@@ -462,10 +437,10 @@ def cache(
                     if not overwrite_cache:
                         value, created_at = backend_inst.get_with_metadata(cache_key)
                         if value is not NO_VALUE and _validate_entry(value, created_at, validate):
-                            manager.record_hit(sync_wrapper)
+                            backend_inst.incr_stat(fn.__name__, 'hits')
                             return value
 
-                    manager.record_miss(sync_wrapper)
+                    backend_inst.incr_stat(fn.__name__, 'misses')
                     result = fn(*args, **kwargs)
 
                     if cache_if is None or cache_if(result):
@@ -517,18 +492,16 @@ def get_cache_info(fn: Callable[..., Any]) -> CacheInfo:
     Returns
         CacheInfo with hits, misses, and currsize
     """
-    hits, misses = manager.get_stats(fn)
-
     meta = getattr(fn, '_cache_meta', None)
     if meta is None:
-        return CacheInfo(hits=hits, misses=misses, currsize=0)
-
-    backend_instance = manager.get_backend(meta.package, meta.backend, meta.ttl)
-    cfg = get_config(meta.package)
+        return CacheInfo(hits=0, misses=0, currsize=0)
 
     fn_name = getattr(fn, '__wrapped__', fn).__name__
-    pattern = f'*:{cfg.key_prefix}{fn_name}|*'
+    backend_instance = manager.get_backend(meta.package, meta.backend, meta.ttl)
+    hits, misses = backend_instance.get_stats(fn_name)
 
+    cfg = get_config(meta.package)
+    pattern = f'*:{cfg.key_prefix}{fn_name}|*'
     currsize = backend_instance.count(pattern)
 
     return CacheInfo(hits=hits, misses=misses, currsize=currsize)
@@ -543,18 +516,16 @@ async def get_async_cache_info(fn: Callable[..., Any]) -> CacheInfo:
     Returns
         CacheInfo with hits, misses, and currsize
     """
-    hits, misses = manager.get_stats(fn)
-
     meta = getattr(fn, '_cache_meta', None)
     if meta is None:
-        return CacheInfo(hits=hits, misses=misses, currsize=0)
-
-    backend_instance = await manager.aget_backend(meta.package, meta.backend, meta.ttl)
-    cfg = get_config(meta.package)
+        return CacheInfo(hits=0, misses=0, currsize=0)
 
     fn_name = getattr(fn, '__wrapped__', fn).__name__
-    pattern = f'*:{cfg.key_prefix}{fn_name}|*'
+    backend_instance = await manager.aget_backend(meta.package, meta.backend, meta.ttl)
+    hits, misses = await backend_instance.aget_stats(fn_name)
 
+    cfg = get_config(meta.package)
+    pattern = f'*:{cfg.key_prefix}{fn_name}|*'
     currsize = await backend_instance.acount(pattern)
 
     return CacheInfo(hits=hits, misses=misses, currsize=currsize)
