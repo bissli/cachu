@@ -116,13 +116,15 @@ class AsyncioMutex(AsyncCacheMutex):
     """Per-key asyncio.Lock for local async dogpile prevention.
     """
     _locks: ClassVar[dict[str, asyncio.Lock]] = {}
+    _registry_lock: ClassVar[threading.Lock] = threading.Lock()
 
     def __init__(self, key: str) -> None:
         self._key = key
         self._acquired = False
-        if key not in self._locks:
-            self._locks[key] = asyncio.Lock()
-        self._lock = self._locks[key]
+        with self._registry_lock:
+            if key not in self._locks:
+                self._locks[key] = asyncio.Lock()
+            self._lock = self._locks[key]
 
     async def acquire(self, timeout: float | None = None) -> bool:
         if timeout is None:
@@ -146,7 +148,8 @@ class AsyncioMutex(AsyncCacheMutex):
     def clear_locks(cls) -> None:
         """Clear all locks. For testing only.
         """
-        cls._locks.clear()
+        with cls._registry_lock:
+            cls._locks.clear()
 
 
 class RedisMutex(CacheMutex):
