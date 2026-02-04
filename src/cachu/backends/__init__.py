@@ -2,7 +2,7 @@
 """
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Iterator
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
     from ..mutex import AsyncCacheMutex, CacheMutex
@@ -56,6 +56,23 @@ class Backend(ABC):
         """Get a mutex for dogpile prevention on the given key.
         """
 
+    # ===== Stats interface (sync) =====
+
+    @abstractmethod
+    def incr_stat(self, fn_name: str, stat: Literal['hits', 'misses']) -> None:
+        """Increment a stat counter for a function.
+        """
+
+    @abstractmethod
+    def get_stats(self, fn_name: str) -> tuple[int, int]:
+        """Get (hits, misses) for a function.
+        """
+
+    @abstractmethod
+    def clear_stats(self, fn_name: str | None = None) -> None:
+        """Clear stats for a function, or all stats if fn_name is None.
+        """
+
     # ===== Async interface =====
 
     @abstractmethod
@@ -96,6 +113,23 @@ class Backend(ABC):
     @abstractmethod
     def get_async_mutex(self, key: str) -> 'AsyncCacheMutex':
         """Get an async mutex for dogpile prevention on the given key.
+        """
+
+    # ===== Stats interface (async) =====
+
+    @abstractmethod
+    async def aincr_stat(self, fn_name: str, stat: Literal['hits', 'misses']) -> None:
+        """Async increment a stat counter for a function.
+        """
+
+    @abstractmethod
+    async def aget_stats(self, fn_name: str) -> tuple[int, int]:
+        """Async get (hits, misses) for a function.
+        """
+
+    @abstractmethod
+    async def aclear_stats(self, fn_name: str | None = None) -> None:
+        """Async clear stats for a function, or all stats if fn_name is None.
         """
 
     # ===== Lifecycle =====

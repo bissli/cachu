@@ -1,7 +1,7 @@
 """Null cache backend for testing (passthrough, no caching).
 """
 from collections.abc import AsyncIterator, Iterator
-from typing import Any
+from typing import Any, Literal
 
 from ..mutex import NullAsyncMutex, NullMutex
 from . import NO_VALUE, Backend
@@ -52,6 +52,19 @@ class NullBackend(Backend):
         """
         return NullMutex()
 
+    def incr_stat(self, fn_name: str, stat: Literal['hits', 'misses']) -> None:
+        """No-op.
+        """
+
+    def get_stats(self, fn_name: str) -> tuple[int, int]:
+        """Always returns (0, 0).
+        """
+        return (0, 0)
+
+    def clear_stats(self, fn_name: str | None = None) -> None:
+        """No-op.
+        """
+
     async def aget(self, key: str) -> Any:
         """Always returns NO_VALUE.
         """
@@ -90,3 +103,16 @@ class NullBackend(Backend):
         """Returns NullAsyncMutex (no-op async mutex).
         """
         return NullAsyncMutex()
+
+    async def aincr_stat(self, fn_name: str, stat: Literal['hits', 'misses']) -> None:
+        """No-op.
+        """
+
+    async def aget_stats(self, fn_name: str) -> tuple[int, int]:
+        """Always returns (0, 0).
+        """
+        return (0, 0)
+
+    async def aclear_stats(self, fn_name: str | None = None) -> None:
+        """No-op.
+        """

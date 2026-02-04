@@ -5,7 +5,7 @@ import struct
 import threading
 import time
 from collections.abc import AsyncIterator, Iterator
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from ..mutex import AsyncCacheMutex, AsyncRedisMutex, CacheMutex, RedisMutex
 from . import NO_VALUE, Backend
@@ -17,6 +17,7 @@ if TYPE_CHECKING:
 
 _METADATA_FORMAT = 'd'
 _METADATA_SIZE = struct.calcsize(_METADATA_FORMAT)
+_STATS_KEY_PREFIX = 'cachu:stats:'
 
 
 def _get_redis_module() -> Any:
@@ -171,6 +172,28 @@ class RedisBackend(Backend):
         """
         return RedisMutex(self.client, f'lock:{key}', self._lock_timeout)
 
+    # ===== Stats interface (sync) =====
+
+    def incr_stat(self, fn_name: str, stat: Literal['hits', 'misses']) -> None:
+        """Increment a stat counter for a function.
+        """
+        self.client.hincrby(f'{_STATS_KEY_PREFIX}{fn_name}', stat, 1)
+
+    def get_stats(self, fn_name: str) -> tuple[int, int]:
+        """Get (hits, misses) for a function.
+        """
+        data = self.client.hgetall(f'{_STATS_KEY_PREFIX}{fn_name}')
+        return (int(data.get(b'hits', 0)), int(data.get(b'misses', 0)))
+
+    def clear_stats(self, fn_name: str | None = None) -> None:
+        """Clear stats for a function, or all stats if fn_name is None.
+        """
+        if fn_name:
+            self.client.delete(f'{_STATS_KEY_PREFIX}{fn_name}')
+        else:
+            for key in self.client.scan_iter(match=f'{_STATS_KEY_PREFIX}*'):
+                self.client.delete(key)
+
     # ===== Async interface =====
 
     async def aget(self, key: str) -> Any:
@@ -246,6 +269,31 @@ class RedisBackend(Backend):
         """Get an async mutex for dogpile prevention on the given key.
         """
         return AsyncRedisMutex(self._get_async_client(), f'lock:{key}', self._lock_timeout)
+
+    # ===== Stats interface (async) =====
+
+    async def aincr_stat(self, fn_name: str, stat: Literal['hits', 'misses']) -> None:
+        """Async increment a stat counter for a function.
+        """
+        client = self._get_async_client()
+        await client.hincrby(f'{_STATS_KEY_PREFIX}{fn_name}', stat, 1)
+
+    async def aget_stats(self, fn_name: str) -> tuple[int, int]:
+        """Async get (hits, misses) for a function.
+        """
+        client = self._get_async_client()
+        data = await client.hgetall(f'{_STATS_KEY_PREFIX}{fn_name}')
+        return (int(data.get(b'hits', 0)), int(data.get(b'misses', 0)))
+
+    async def aclear_stats(self, fn_name: str | None = None) -> None:
+        """Async clear stats for a function, or all stats if fn_name is None.
+        """
+        client = self._get_async_client()
+        if fn_name:
+            await client.delete(f'{_STATS_KEY_PREFIX}{fn_name}')
+        else:
+            async for key in client.scan_iter(match=f'{_STATS_KEY_PREFIX}*'):
+                await client.delete(key)
 
     # ===== Lifecycle =====
 
