@@ -6,8 +6,7 @@ from typing import Any
 
 from .backends import NO_VALUE
 from .config import _get_caller_package, get_config
-from .decorator import async_manager, get_async_cache_info, get_cache_info
-from .decorator import manager
+from .decorator import get_async_cache_info, get_cache_info, manager
 from .keys import _tag_to_pattern, mangle_key
 from .types import CacheInfo, CacheMeta
 
@@ -140,7 +139,7 @@ def cache_clear(
             total_cleared += cleared
             logger.debug(f'Cleared {cleared} entries from {backend} backend (ttl={ttl})')
     else:
-        with manager._backends_lock:
+        with manager._sync_lock:
             for (pkg, btype, bttl), backend_instance in list(manager.backends.items()):
                 if pkg != package:
                     continue
@@ -184,7 +183,7 @@ async def async_cache_get(
     """Get a cached value without calling the async function.
 
     Args:
-        fn: A function decorated with @async_cache
+        fn: A function decorated with @cache
         default: Value to return if not found (raises KeyError if not provided)
         **kwargs: Function arguments to build the cache key
 
@@ -193,17 +192,17 @@ async def async_cache_get(
 
     Raises
         KeyError: If not found and no default provided
-        ValueError: If function is not decorated with @async_cache
+        ValueError: If function is not decorated with @cache
     """
-    meta = _get_meta(fn, '@async_cache')
+    meta = _get_meta(fn, '@cache')
     cfg = get_config(meta.package)
 
     key_generator = fn._cache_key_generator
     base_key = key_generator(**kwargs)
     cache_key = mangle_key(base_key, cfg.key_prefix, meta.ttl)
 
-    backend = await async_manager.get_backend(meta.package, meta.backend, meta.ttl)
-    value = await backend.get(cache_key)
+    backend = await manager.aget_backend(meta.package, meta.backend, meta.ttl)
+    value = await backend.aget(cache_key)
 
     if value is NO_VALUE:
         if default is _MISSING:
@@ -217,22 +216,22 @@ async def async_cache_set(fn: Callable[..., Any], value: Any, **kwargs: Any) -> 
     """Set a cached value directly without calling the async function.
 
     Args:
-        fn: A function decorated with @async_cache
+        fn: A function decorated with @cache
         value: The value to cache
         **kwargs: Function arguments to build the cache key
 
     Raises
-        ValueError: If function is not decorated with @async_cache
+        ValueError: If function is not decorated with @cache
     """
-    meta = _get_meta(fn, '@async_cache')
+    meta = _get_meta(fn, '@cache')
     cfg = get_config(meta.package)
 
     key_generator = fn._cache_key_generator
     base_key = key_generator(**kwargs)
     cache_key = mangle_key(base_key, cfg.key_prefix, meta.ttl)
 
-    backend = await async_manager.get_backend(meta.package, meta.backend, meta.ttl)
-    await backend.set(cache_key, value, meta.ttl)
+    backend = await manager.aget_backend(meta.package, meta.backend, meta.ttl)
+    await backend.aset(cache_key, value, meta.ttl)
 
     logger.debug(f'Set cache for {fn.__name__} with key {cache_key}')
 
@@ -241,21 +240,21 @@ async def async_cache_delete(fn: Callable[..., Any], **kwargs: Any) -> None:
     """Delete a specific cached entry.
 
     Args:
-        fn: A function decorated with @async_cache
+        fn: A function decorated with @cache
         **kwargs: Function arguments to build the cache key
 
     Raises
-        ValueError: If function is not decorated with @async_cache
+        ValueError: If function is not decorated with @cache
     """
-    meta = _get_meta(fn, '@async_cache')
+    meta = _get_meta(fn, '@cache')
     cfg = get_config(meta.package)
 
     key_generator = fn._cache_key_generator
     base_key = key_generator(**kwargs)
     cache_key = mangle_key(base_key, cfg.key_prefix, meta.ttl)
 
-    backend = await async_manager.get_backend(meta.package, meta.backend, meta.ttl)
-    await backend.delete(cache_key)
+    backend = await manager.aget_backend(meta.package, meta.backend, meta.ttl)
+    await backend.adelete(cache_key)
 
     logger.debug(f'Deleted cache for {fn.__name__} with key {cache_key}')
 
@@ -289,14 +288,14 @@ async def async_cache_clear(
     total_cleared = 0
 
     if backend is not None and ttl is not None:
-        backend_instance = await async_manager.get_backend(package, backend, ttl)
-        cleared = await backend_instance.clear(pattern)
+        backend_instance = await manager.aget_backend(package, backend, ttl)
+        cleared = await backend_instance.aclear(pattern)
         if cleared > 0:
             total_cleared += cleared
             logger.debug(f'Cleared {cleared} entries from {backend} backend (ttl={ttl})')
     else:
-        async with async_manager._backends_lock:
-            for (pkg, btype, bttl), backend_instance in list(async_manager.backends.items()):
+        async with manager._get_async_lock():
+            for (pkg, btype, bttl), backend_instance in list(manager.backends.items()):
                 if pkg != package:
                     continue
                 if btype not in backends_to_clear:
@@ -304,13 +303,13 @@ async def async_cache_clear(
                 if ttl is not None and bttl != ttl:
                     continue
 
-                cleared = await backend_instance.clear(pattern)
+                cleared = await backend_instance.aclear(pattern)
                 if cleared > 0:
                     total_cleared += cleared
                     logger.debug(f'Cleared {cleared} entries from {btype} backend (ttl={bttl})')
 
-    async with async_manager._stats_lock:
-        async_manager.stats.clear()
+    with manager._stats_lock:
+        manager.stats.clear()
 
     return total_cleared
 
@@ -319,13 +318,13 @@ async def async_cache_info(fn: Callable[..., Any]) -> CacheInfo:
     """Get cache statistics for an async decorated function.
 
     Args:
-        fn: A function decorated with @async_cache
+        fn: A function decorated with @cache
 
     Returns
         CacheInfo with hits, misses, and currsize
 
     Raises
-        ValueError: If function is not decorated with @async_cache
+        ValueError: If function is not decorated with @cache
     """
-    _get_meta(fn, '@async_cache')
+    _get_meta(fn, '@cache')
     return await get_async_cache_info(fn)

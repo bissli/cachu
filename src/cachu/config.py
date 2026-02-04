@@ -58,6 +58,7 @@ class CacheConfig:
     key_prefix: str = ''
     file_dir: str = '/tmp'
     redis_url: str = 'redis://localhost:6379/0'
+    lock_timeout: float = 10.0
 
 
 class ConfigRegistry:
@@ -79,6 +80,7 @@ class ConfigRegistry:
         key_prefix: str | None = None,
         file_dir: str | None = None,
         redis_url: str | None = None,
+        lock_timeout: float | None = None,
     ) -> CacheConfig:
         """Configure cache for a specific package.
         """
@@ -90,6 +92,7 @@ class ConfigRegistry:
             'key_prefix': key_prefix,
             'file_dir': str(file_dir) if file_dir else None,
             'redis_url': redis_url,
+            'lock_timeout': lock_timeout,
         }
         updates = {k: v for k, v in updates.items() if v is not None}
 
@@ -152,6 +155,7 @@ def configure(
     key_prefix: str | None = None,
     file_dir: str | None = None,
     redis_url: str | None = None,
+    lock_timeout: float | None = None,
 ) -> CacheConfig:
     """Configure cache settings for the caller's package.
 
@@ -163,12 +167,14 @@ def configure(
         key_prefix: Prefix for all cache keys (for versioning/debugging)
         file_dir: Directory for file-based caches
         redis_url: Redis connection URL (e.g., 'redis://localhost:6379/0')
+        lock_timeout: Timeout for distributed locks in seconds (default: 10.0)
     """
     return _registry.configure(
         backend=backend,
         key_prefix=key_prefix,
         file_dir=str(file_dir) if file_dir else None,
         redis_url=redis_url,
+        lock_timeout=lock_timeout,
     )
 
 

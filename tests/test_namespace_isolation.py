@@ -98,17 +98,22 @@ class TestKeyPrefixCapture:
     """Tests for key_prefix capture at decoration time."""
 
     def test_key_prefix_captured_at_decoration(self):
-        """Verify key_prefix is captured when decorator is applied."""
+        """Verify key_prefix is captured when decorator is applied.
+        """
         cachu.configure(key_prefix='v1:', backend='memory')
+
+        call_count = 0
 
         @cachu.cache(ttl=300, backend='memory')
         def func(x: int) -> int:
+            nonlocal call_count
+            call_count += 1
             return x
 
         func(5)
+        func(5)
 
-        # The function's CacheMeta should have the key_prefix from decoration time
-        assert func._cache_meta.package is not None
+        assert call_count == 1
 
     def test_different_packages_have_different_key_prefixes(self):
         """Verify different packages can have different key prefixes."""

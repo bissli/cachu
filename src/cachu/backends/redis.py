@@ -6,7 +6,8 @@ import time
 from collections.abc import AsyncIterator, Iterator
 from typing import TYPE_CHECKING, Any
 
-from . import NO_VALUE, AsyncBackend, Backend
+from ..mutex import AsyncCacheMutex, AsyncRedisMutex, CacheMutex, RedisMutex
+from . import NO_VALUE, Backend
 
 if TYPE_CHECKING:
     import redis
@@ -25,7 +26,7 @@ def _get_redis_module() -> Any:
         return redis
     except ImportError as e:
         raise RuntimeError(
-            "Redis support requires the 'redis' package. Install with: pip install cache[redis]"
+            "Redis support requires the 'redis' package. Install with: pip install cachu[redis]"
         ) from e
 
 
@@ -40,16 +41,6 @@ def _get_async_redis_module() -> Any:
             "Async Redis support requires the 'redis' package (>=4.2.0). "
             "Install with: pip install cachu[redis]"
         ) from e
-
-
-async def get_async_redis_client(url: str) -> 'aioredis.Redis':
-    """Create an async Redis client from URL.
-
-    Args:
-        url: Redis URL (e.g., 'redis://localhost:6379/0')
-    """
-    aioredis = _get_async_redis_module()
-    return aioredis.from_url(url)
 
 
 def get_redis_client(url: str) -> 'redis.Redis':
@@ -79,20 +70,32 @@ def _unpack_value(data: bytes) -> tuple[Any, float]:
 
 
 class RedisBackend(Backend):
-    """Redis cache backend.
+    """Unified Redis cache backend with both sync and async interfaces.
     """
 
-    def __init__(self, url: str) -> None:
+    def __init__(self, url: str, lock_timeout: float = 10.0) -> None:
         self._url = url
-        self._client: redis.Redis | None = None
+        self._lock_timeout = lock_timeout
+        self._sync_client: redis.Redis | None = None
+        self._async_client: aioredis.Redis | None = None
 
     @property
     def client(self) -> 'redis.Redis':
-        """Lazy-load Redis client.
+        """Lazy-load sync Redis client.
         """
-        if self._client is None:
-            self._client = get_redis_client(self._url)
-        return self._client
+        if self._sync_client is None:
+            self._sync_client = get_redis_client(self._url)
+        return self._sync_client
+
+    def _get_async_client(self) -> 'aioredis.Redis':
+        """Lazy-load async Redis client (from_url is NOT async).
+        """
+        if self._async_client is None:
+            aioredis = _get_async_redis_module()
+            self._async_client = aioredis.from_url(self._url)
+        return self._async_client
+
+    # ===== Sync interface =====
 
     def get(self, key: str) -> Any:
         """Get value by key. Returns NO_VALUE if not found.
@@ -148,67 +151,51 @@ class RedisBackend(Backend):
         """
         return sum(1 for _ in self.keys(pattern))
 
-    def close(self) -> None:
-        """Close the Redis connection.
+    def get_mutex(self, key: str) -> CacheMutex:
+        """Get a mutex for dogpile prevention on the given key.
         """
-        if self._client is not None:
-            self._client.close()
-            self._client = None
+        return RedisMutex(self.client, f'lock:{key}', self._lock_timeout)
 
+    # ===== Async interface =====
 
-class AsyncRedisBackend(AsyncBackend):
-    """Async Redis cache backend using redis.asyncio.
-    """
-
-    def __init__(self, url: str) -> None:
-        self._url = url
-        self._client: aioredis.Redis | None = None
-
-    async def _get_client(self) -> 'aioredis.Redis':
-        """Lazy-load async Redis client.
+    async def aget(self, key: str) -> Any:
+        """Async get value by key. Returns NO_VALUE if not found.
         """
-        if self._client is None:
-            self._client = await get_async_redis_client(self._url)
-        return self._client
-
-    async def get(self, key: str) -> Any:
-        """Get value by key. Returns NO_VALUE if not found.
-        """
-        client = await self._get_client()
+        client = self._get_async_client()
         data = await client.get(key)
         if data is None:
             return NO_VALUE
         value, _ = _unpack_value(data)
         return value
 
-    async def get_with_metadata(self, key: str) -> tuple[Any, float | None]:
-        """Get value and creation timestamp. Returns (NO_VALUE, None) if not found.
+    async def aget_with_metadata(self, key: str) -> tuple[Any, float | None]:
+        """Async get value and creation timestamp. Returns (NO_VALUE, None) if not found.
         """
-        client = await self._get_client()
+        client = self._get_async_client()
         data = await client.get(key)
         if data is None:
             return NO_VALUE, None
         value, created_at = _unpack_value(data)
         return value, created_at
 
-    async def set(self, key: str, value: Any, ttl: int) -> None:
-        """Set value with TTL in seconds.
+    async def aset(self, key: str, value: Any, ttl: int) -> None:
+        """Async set value with TTL in seconds.
         """
-        client = await self._get_client()
+        client = self._get_async_client()
         now = time.time()
         packed = _pack_value(value, now)
         await client.setex(key, ttl, packed)
 
-    async def delete(self, key: str) -> None:
-        """Delete value by key.
+    async def adelete(self, key: str) -> None:
+        """Async delete value by key.
         """
-        client = await self._get_client()
+        client = self._get_async_client()
         await client.delete(key)
 
-    async def clear(self, pattern: str | None = None) -> int:
-        """Clear entries matching pattern. Returns count of cleared entries.
+    async def aclear(self, pattern: str | None = None) -> int:
+        """Async clear entries matching pattern. Returns count of cleared entries.
         """
-        client = await self._get_client()
+        client = self._get_async_client()
         if pattern is None:
             pattern = '*'
 
@@ -218,25 +205,59 @@ class AsyncRedisBackend(AsyncBackend):
             count += 1
         return count
 
-    async def keys(self, pattern: str | None = None) -> AsyncIterator[str]:
-        """Iterate over keys matching pattern.
+    async def akeys(self, pattern: str | None = None) -> AsyncIterator[str]:
+        """Async iterate over keys matching pattern.
         """
-        client = await self._get_client()
+        client = self._get_async_client()
         redis_pattern = pattern or '*'
         async for key in client.scan_iter(match=redis_pattern):
             yield key.decode() if isinstance(key, bytes) else key
 
-    async def count(self, pattern: str | None = None) -> int:
-        """Count keys matching pattern.
+    async def acount(self, pattern: str | None = None) -> int:
+        """Async count keys matching pattern.
         """
         count = 0
-        async for _ in self.keys(pattern):
+        async for _ in self.akeys(pattern):
             count += 1
         return count
 
-    async def close(self) -> None:
-        """Close the Redis connection.
+    def get_async_mutex(self, key: str) -> AsyncCacheMutex:
+        """Get an async mutex for dogpile prevention on the given key.
         """
-        if self._client is not None:
-            await self._client.close()
-            self._client = None
+        return AsyncRedisMutex(self._get_async_client(), f'lock:{key}', self._lock_timeout)
+
+    # ===== Lifecycle =====
+
+    def _close_sync_client(self) -> None:
+        """Close sync client if open.
+        """
+        if self._sync_client is not None:
+            client = self._sync_client
+            self._sync_client = None
+            client.close()
+
+    def _close_async_client_sync(self) -> None:
+        """Forcefully close async client from sync context.
+        """
+        if self._async_client is not None:
+            client = self._async_client
+            self._async_client = None
+            try:
+                client.close()
+            except Exception:
+                pass
+
+    def close(self) -> None:
+        """Close all backend resources from sync context.
+        """
+        self._close_sync_client()
+        self._close_async_client_sync()
+
+    async def aclose(self) -> None:
+        """Close all backend resources from async context.
+        """
+        if self._async_client is not None:
+            client = self._async_client
+            self._async_client = None
+            await client.aclose()
+        self._close_sync_client()

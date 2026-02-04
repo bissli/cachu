@@ -23,12 +23,13 @@ site.addsitedir(HERE)
 def _clear_all_backends() -> None:
     """Clear all backend instances (internal test helper).
     """
-    from cachu.decorator import async_manager, manager
+    from cachu.decorator import manager
+    from cachu.mutex import AsyncioMutex, ThreadingMutex
 
-    with manager._backends_lock:
+    with manager._sync_lock:
         for backend in manager.backends.values():
             try:
-                backend.clear()
+                backend.close()
             except Exception:
                 pass
         manager.backends.clear()
@@ -36,14 +37,8 @@ def _clear_all_backends() -> None:
     with manager._stats_lock:
         manager.stats.clear()
 
-    for backend in async_manager.backends.values():
-        try:
-            if hasattr(backend, '_cache'):
-                backend._cache.clear()
-        except Exception:
-            pass
-    async_manager.backends.clear()
-    async_manager.stats.clear()
+    ThreadingMutex.clear_locks()
+    AsyncioMutex.clear_locks()
 
 
 @pytest.fixture(autouse=True)

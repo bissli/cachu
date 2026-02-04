@@ -2,11 +2,11 @@
 """
 __version__ = '0.2.4'
 
-from .backends import AsyncBackend, Backend
+from .backends import Backend
 from .backends.redis import get_redis_client
 from .config import configure, disable, enable, get_all_configs, get_config
 from .config import is_disabled
-from .decorator import async_cache, cache, clear_async_backends
+from .decorator import aget_backend, cache, clear_async_backends
 from .decorator import get_async_backend, get_async_cache_info, get_backend
 from .operations import async_cache_clear, async_cache_delete, async_cache_get
 from .operations import async_cache_info, async_cache_set, cache_clear
@@ -26,10 +26,9 @@ __all__ = [
     'cache_clear',
     'cache_info',
     'get_backend',
+    'aget_backend',
     'get_redis_client',
     'Backend',
-    'AsyncBackend',
-    'async_cache',
     'async_cache_get',
     'async_cache_set',
     'async_cache_delete',
