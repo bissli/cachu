@@ -16,7 +16,7 @@ def test_get_all_configs_returns_default():
 def test_get_all_configs_includes_package_configs():
     """Verify get_all_configs includes package-specific configurations.
     """
-    cachu.configure(key_prefix='ns1:', backend='memory')
+    cachu.configure(key_prefix='ns1:', backend_default='memory')
     configs = cachu.get_all_configs()
     assert '_default' in configs
     pkg_configs = [k for k in configs if k != '_default']
