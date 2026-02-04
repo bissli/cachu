@@ -81,16 +81,14 @@ class ConfigRegistry:
         file_dir: str | None = None,
         redis_url: str | None = None,
         lock_timeout: float | None = None,
-        backend: str | None = None,  # Legacy
     ) -> CacheConfig:
         """Configure cache for a specific package.
         """
         if package is None:
             package = _get_caller_package()
 
-        resolved_backend = backend_default if backend_default is not None else backend
         updates = {
-            'backend_default': resolved_backend,
+            'backend_default': backend_default,
             'key_prefix': key_prefix,
             'file_dir': str(file_dir) if file_dir else None,
             'redis_url': redis_url,
@@ -158,7 +156,6 @@ def configure(
     file_dir: str | None = None,
     redis_url: str | None = None,
     lock_timeout: float | None = None,
-    backend: str | None = None,  # Legacy
 ) -> CacheConfig:
     """Configure cache settings for the caller's package.
 
@@ -171,7 +168,6 @@ def configure(
         file_dir: Directory for file-based caches
         redis_url: Redis connection URL (e.g., 'redis://localhost:6379/0')
         lock_timeout: Timeout for distributed locks in seconds (default: 10.0)
-        backend: Deprecated. Use backend_default instead.
     """
     return _registry.configure(
         backend_default=backend_default,
@@ -179,7 +175,6 @@ def configure(
         file_dir=str(file_dir) if file_dir else None,
         redis_url=redis_url,
         lock_timeout=lock_timeout,
-        backend=backend,
     )
 
 

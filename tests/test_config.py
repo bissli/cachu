@@ -40,19 +40,11 @@ def test_configure_backend_default_setting():
     assert cfg.backend_default == 'file'
 
 
-def test_configure_legacy_backend_setting():
-    """Verify legacy backend parameter still works.
-    """
-    cachu.configure(backend='redis')
-    cfg = cachu.get_config()
-    assert cfg.backend_default == 'redis'
-
-
 def test_configure_invalid_backend_raises():
     """Verify invalid backend raises ValueError.
     """
     with pytest.raises(ValueError, match='backend must be one of'):
-        cachu.configure(backend='invalid')
+        cachu.configure(backend_default='invalid')
 
 
 def test_configure_invalid_file_dir_raises(tmp_path):

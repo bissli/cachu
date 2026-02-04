@@ -6,7 +6,7 @@ import cachu
 def test_cache_uses_configured_default_backend():
     """Verify @cache without backend uses configured default.
     """
-    cachu.configure(backend='memory')
+    cachu.configure(backend_default='memory')
     call_count = 0
 
     @cachu.cache(ttl=300)
@@ -26,7 +26,7 @@ def test_cache_uses_configured_default_backend():
 def test_cache_with_file_default(temp_cache_dir):
     """Verify @cache uses file backend when configured as default.
     """
-    cachu.configure(backend='file')
+    cachu.configure(backend_default='file')
     call_count = 0
 
     @cachu.cache(ttl=300)
@@ -110,7 +110,7 @@ def test_cache_delete_removes_value():
 def test_explicit_backend_overrides_default():
     """Verify explicit backend parameter overrides configured default.
     """
-    cachu.configure(backend='file')
+    cachu.configure(backend_default='file')
 
     call_count = 0
 

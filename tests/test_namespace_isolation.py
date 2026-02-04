@@ -100,7 +100,7 @@ class TestKeyPrefixCapture:
     def test_key_prefix_captured_at_decoration(self):
         """Verify key_prefix is captured when decorator is applied.
         """
-        cachu.configure(key_prefix='v1:', backend='memory')
+        cachu.configure(key_prefix='v1:', backend_default='memory')
 
         call_count = 0
 
