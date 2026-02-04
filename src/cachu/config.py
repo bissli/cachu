@@ -54,7 +54,7 @@ def _get_caller_package() -> str | None:
 class CacheConfig:
     """Configuration for cache backends.
     """
-    backend: str = 'memory'
+    backend_default: str = 'memory'
     key_prefix: str = ''
     file_dir: str = '/tmp'
     redis_url: str = 'redis://localhost:6379/0'
@@ -76,19 +76,21 @@ class ConfigRegistry:
     def configure(
         self,
         package: str | None = None,
-        backend: str | None = None,
+        backend_default: str | None = None,
         key_prefix: str | None = None,
         file_dir: str | None = None,
         redis_url: str | None = None,
         lock_timeout: float | None = None,
+        backend: str | None = None,  # Legacy
     ) -> CacheConfig:
         """Configure cache for a specific package.
         """
         if package is None:
             package = _get_caller_package()
 
+        resolved_backend = backend_default if backend_default is not None else backend
         updates = {
-            'backend': backend,
+            'backend_default': resolved_backend,
             'key_prefix': key_prefix,
             'file_dir': str(file_dir) if file_dir else None,
             'redis_url': redis_url,
@@ -112,8 +114,8 @@ class ConfigRegistry:
     def _validate_config(self, kwargs: dict[str, Any]) -> None:
         """Validate configuration values.
         """
-        if 'backend' in kwargs:
-            backend = kwargs['backend']
+        if 'backend_default' in kwargs:
+            backend = kwargs['backend_default']
             valid_backends = ('memory', 'redis', 'file', 'null')
             if backend not in valid_backends:
                 raise ValueError(f'backend must be one of {valid_backends}, got {backend!r}')
@@ -151,11 +153,12 @@ _registry = ConfigRegistry()
 
 
 def configure(
-    backend: str | None = None,
+    backend_default: str | None = None,
     key_prefix: str | None = None,
     file_dir: str | None = None,
     redis_url: str | None = None,
     lock_timeout: float | None = None,
+    backend: str | None = None,  # Legacy
 ) -> CacheConfig:
     """Configure cache settings for the caller's package.
 
@@ -163,18 +166,20 @@ def configure(
     gets its own isolated configuration.
 
     Args:
-        backend: Default backend type ('memory', 'file', 'redis')
+        backend_default: Default backend type ('memory', 'file', 'redis', 'null')
         key_prefix: Prefix for all cache keys (for versioning/debugging)
         file_dir: Directory for file-based caches
         redis_url: Redis connection URL (e.g., 'redis://localhost:6379/0')
         lock_timeout: Timeout for distributed locks in seconds (default: 10.0)
+        backend: Deprecated. Use backend_default instead.
     """
     return _registry.configure(
-        backend=backend,
+        backend_default=backend_default,
         key_prefix=key_prefix,
         file_dir=str(file_dir) if file_dir else None,
         redis_url=redis_url,
         lock_timeout=lock_timeout,
+        backend=backend,
     )
 
 

@@ -9,7 +9,7 @@ def test_default_configuration():
     """
     from cachu.config import CacheConfig
     default_config = CacheConfig()
-    assert default_config.backend == 'memory'
+    assert default_config.backend_default == 'memory'
     assert default_config.key_prefix == ''
     assert default_config.file_dir == '/tmp'
     assert default_config.redis_url == 'redis://localhost:6379/0'
@@ -32,12 +32,20 @@ def test_configure_redis_settings():
     assert cfg.redis_url == 'redis://redis.example.com:6380/1'
 
 
-def test_configure_backend_setting():
-    """Verify default backend can be changed.
+def test_configure_backend_default_setting():
+    """Verify default backend can be changed via backend_default.
     """
-    cachu.configure(backend='file')
+    cachu.configure(backend_default='file')
     cfg = cachu.get_config()
-    assert cfg.backend == 'file'
+    assert cfg.backend_default == 'file'
+
+
+def test_configure_legacy_backend_setting():
+    """Verify legacy backend parameter still works.
+    """
+    cachu.configure(backend='redis')
+    cfg = cachu.get_config()
+    assert cfg.backend_default == 'redis'
 
 
 def test_configure_invalid_backend_raises():

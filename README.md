@@ -22,7 +22,7 @@ pip install cachu[redis]
 import cachu
 
 # Configure once at startup
-cachu.configure(backend='memory', key_prefix='v1:')
+cachu.configure(backend_default='memory', key_prefix='v1:')
 
 # Use the @cache decorator
 @cachu.cache(ttl=300)
@@ -42,7 +42,7 @@ Configure cache settings at application startup:
 import cachu
 
 cachu.configure(
-    backend='memory',           # Default backend: 'memory', 'file', or 'redis'
+    backend_default='memory',   # Default backend: 'memory', 'file', 'redis', or 'null'
     key_prefix='v1:',           # Prefix for all cache keys
     file_dir='/var/cache/app',  # Directory for file cache
     redis_url='redis://localhost:6379/0',  # Redis connection URL
@@ -51,12 +51,12 @@ cachu.configure(
 
 ### Configuration Options
 
-| Option       | Default                      | Description                                                   |
-| ------------ | ---------------------------- | ------------------------------------------------------------- |
-| `backend`    | `'memory'`                   | Default backend: `'memory'`, `'file'`, `'redis'`, or `'null'` |
-| `key_prefix` | `''`                         | Prefix for all cache keys (useful for versioning)             |
-| `file_dir`   | `'/tmp'`                     | Directory for file-based caches                               |
-| `redis_url`  | `'redis://localhost:6379/0'` | Redis connection URL (supports `rediss://` for TLS)           |
+| Option            | Default                      | Description                                                   |
+| ----------------- | ---------------------------- | ------------------------------------------------------------- |
+| `backend_default` | `'memory'`                   | Default backend: `'memory'`, `'file'`, `'redis'`, or `'null'` |
+| `key_prefix`      | `''`                         | Prefix for all cache keys (useful for versioning)             |
+| `file_dir`        | `'/tmp'`                     | Directory for file-based caches                               |
+| `redis_url`       | `'redis://localhost:6379/0'` | Redis connection URL (supports `rediss://` for TLS)           |
 
 ### Using Multiple Backends
 
@@ -69,7 +69,7 @@ import cachu
 
 # Configure shared settings once at startup
 cachu.configure(
-    backend='memory',                     # Default backend
+    backend_default='memory',             # Default backend
     redis_url='redis://myserver:6379/0',  # Used when backend='redis'
     file_dir='/var/cache/app',            # Used when backend='file'
     key_prefix='v1:'                      # Applied to all backends
@@ -93,7 +93,7 @@ def get_user(user_id: int) -> dict:
 - `redis_url` is used whenever `backend='redis'` is specified
 - `file_dir` is used whenever `backend='file'` is specified
 - `key_prefix` applies to all backends
-- The `backend` in `configure()` is just the default when not specified in the decorator
+- The `backend_default` in `configure()` is just the default when not specified in the decorator
 
 ### Package Isolation
 
