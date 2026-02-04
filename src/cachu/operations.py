@@ -127,7 +127,7 @@ def cache_clear(
     if backend is not None:
         backends_to_clear = [backend]
     else:
-        backends_to_clear = ['memory', 'file', 'redis']
+        backends_to_clear = ['memory', 'file', 'redis', 'null']
 
     pattern = _tag_to_pattern(tag)
     total_cleared = 0
@@ -282,7 +282,7 @@ async def async_cache_clear(
     if backend is not None:
         backends_to_clear = [backend]
     else:
-        backends_to_clear = ['memory', 'file', 'redis']
+        backends_to_clear = ['memory', 'file', 'redis', 'null']
 
     pattern = _tag_to_pattern(tag)
     total_cleared = 0
