@@ -390,3 +390,31 @@ async def test_async_delete_then_access_causes_recomputation():
     result = await compute(5)
     assert call_count == 2
     assert result == 10
+
+
+@pytest.mark.asyncio
+async def test_async_cache_clear_all_backends():
+    """Verify async_cache_clear works without specific backend/ttl params.
+    """
+    @cachu.cache(ttl=300, backend='memory')
+    async def func_a(x: int) -> int:
+        return x * 2
+
+    @cachu.cache(ttl=600, backend='memory')
+    async def func_b(x: int) -> int:
+        return x * 3
+
+    await func_a(1)
+    await func_b(1)
+
+    info_a = await cachu.async_cache_info(func_a)
+    info_b = await cachu.async_cache_info(func_b)
+    assert info_a.misses == 1
+    assert info_b.misses == 1
+
+    await cachu.async_cache_clear()
+
+    info_a = await cachu.async_cache_info(func_a)
+    info_b = await cachu.async_cache_info(func_b)
+    assert info_a.hits == 0 and info_a.misses == 0
+    assert info_b.hits == 0 and info_b.misses == 0
