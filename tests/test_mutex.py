@@ -1,5 +1,6 @@
 """Tests for mutex implementations used in dogpile prevention.
 """
+import threading
 import time
 
 import pytest
@@ -153,6 +154,42 @@ class TestAsyncioMutex:
             assert elapsed >= 0.1
         finally:
             await mutex1.release()
+
+
+class TestAsyncioMutexThreadSafety:
+    """Tests for AsyncioMutex thread-safety during creation.
+    """
+
+    def test_concurrent_creation_same_key(self):
+        """Verify concurrent mutex creation returns same lock instance.
+
+        Spawns multiple threads that simultaneously create AsyncioMutex
+        instances for the same key. Without proper locking, each thread
+        may create its own Lock object, breaking mutual exclusion.
+        """
+        AsyncioMutex.clear_locks()
+        key = 'concurrent_test'
+        mutexes = []
+        results_lock = threading.Lock()
+        barrier = threading.Barrier(10)
+
+        def create_mutex():
+            barrier.wait()
+            mutex = AsyncioMutex(key)
+            with results_lock:
+                mutexes.append(mutex)
+
+        threads = [threading.Thread(target=create_mutex) for _ in range(10)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        locks = [m._lock for m in mutexes]
+        unique_locks = len(set(id(lock) for lock in locks))
+        assert unique_locks == 1, (
+            f'Race condition detected: {unique_locks} different locks created for same key'
+        )
 
 
 @pytest.mark.redis
