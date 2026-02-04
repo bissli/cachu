@@ -6,7 +6,7 @@ import pickle
 import threading
 import time
 from collections.abc import AsyncIterator, Iterator
-from typing import Any
+from typing import Any, Literal
 
 from ..mutex import AsyncioMutex, CacheMutex, ThreadingMutex
 from . import NO_VALUE, Backend
@@ -18,6 +18,7 @@ class MemoryBackend(Backend):
 
     def __init__(self) -> None:
         self._cache: dict[str, tuple[bytes, float, float]] = {}
+        self._stats: dict[str, tuple[int, int]] = {}
         self._sync_lock = threading.RLock()
         self._async_lock = asyncio.Lock()
 
@@ -140,6 +141,33 @@ class MemoryBackend(Backend):
         """
         return ThreadingMutex(f'memory:{key}')
 
+    # ===== Stats interface (sync) =====
+
+    def incr_stat(self, fn_name: str, stat: Literal['hits', 'misses']) -> None:
+        """Increment a stat counter for a function.
+        """
+        with self._sync_lock:
+            hits, misses = self._stats.get(fn_name, (0, 0))
+            if stat == 'hits':
+                self._stats[fn_name] = (hits + 1, misses)
+            else:
+                self._stats[fn_name] = (hits, misses + 1)
+
+    def get_stats(self, fn_name: str) -> tuple[int, int]:
+        """Get (hits, misses) for a function.
+        """
+        with self._sync_lock:
+            return self._stats.get(fn_name, (0, 0))
+
+    def clear_stats(self, fn_name: str | None = None) -> None:
+        """Clear stats for a function, or all stats if fn_name is None.
+        """
+        with self._sync_lock:
+            if fn_name:
+                self._stats.pop(fn_name, None)
+            else:
+                self._stats.clear()
+
     # ===== Async interface =====
 
     async def aget(self, key: str) -> Any:
@@ -192,6 +220,33 @@ class MemoryBackend(Backend):
         """Get an async mutex for dogpile prevention on the given key.
         """
         return AsyncioMutex(f'memory:{key}')
+
+    # ===== Stats interface (async) =====
+
+    async def aincr_stat(self, fn_name: str, stat: Literal['hits', 'misses']) -> None:
+        """Async increment a stat counter for a function.
+        """
+        async with self._async_lock:
+            hits, misses = self._stats.get(fn_name, (0, 0))
+            if stat == 'hits':
+                self._stats[fn_name] = (hits + 1, misses)
+            else:
+                self._stats[fn_name] = (hits, misses + 1)
+
+    async def aget_stats(self, fn_name: str) -> tuple[int, int]:
+        """Async get (hits, misses) for a function.
+        """
+        async with self._async_lock:
+            return self._stats.get(fn_name, (0, 0))
+
+    async def aclear_stats(self, fn_name: str | None = None) -> None:
+        """Async clear stats for a function, or all stats if fn_name is None.
+        """
+        async with self._async_lock:
+            if fn_name:
+                self._stats.pop(fn_name, None)
+            else:
+                self._stats.clear()
 
     # ===== Lifecycle =====
 

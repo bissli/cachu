@@ -6,7 +6,7 @@ import sqlite3
 import threading
 import time
 from collections.abc import AsyncIterator, Iterator
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from ..mutex import AsyncCacheMutex, AsyncioMutex, CacheMutex, ThreadingMutex
 from . import NO_VALUE, Backend
@@ -59,6 +59,13 @@ class SqliteBackend(Backend):
                     CREATE INDEX IF NOT EXISTS idx_cache_expires
                     ON cache(expires_at)
                 """)
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS cache_stats (
+                        fn_name TEXT PRIMARY KEY,
+                        hits INTEGER DEFAULT 0,
+                        misses INTEGER DEFAULT 0
+                    )
+                """)
                 conn.commit()
             finally:
                 conn.close()
@@ -85,6 +92,13 @@ class SqliteBackend(Backend):
                 await self._async_connection.execute("""
                     CREATE INDEX IF NOT EXISTS idx_cache_expires
                     ON cache(expires_at)
+                """)
+                await self._async_connection.execute("""
+                    CREATE TABLE IF NOT EXISTS cache_stats (
+                        fn_name TEXT PRIMARY KEY,
+                        hits INTEGER DEFAULT 0,
+                        misses INTEGER DEFAULT 0
+                    )
                 """)
                 await self._async_connection.commit()
                 self._async_initialized = True
@@ -305,6 +319,61 @@ class SqliteBackend(Backend):
             finally:
                 conn.close()
 
+    # ===== Stats interface (sync) =====
+
+    def incr_stat(self, fn_name: str, stat: Literal['hits', 'misses']) -> None:
+        """Increment a stat counter for a function.
+        """
+        with self._sync_lock:
+            conn = self._get_sync_connection()
+            try:
+                if stat == 'hits':
+                    conn.execute(
+                        """INSERT INTO cache_stats (fn_name, hits, misses)
+                           VALUES (?, 1, 0)
+                           ON CONFLICT(fn_name) DO UPDATE SET hits = hits + 1""",
+                        (fn_name,),
+                    )
+                else:
+                    conn.execute(
+                        """INSERT INTO cache_stats (fn_name, hits, misses)
+                           VALUES (?, 0, 1)
+                           ON CONFLICT(fn_name) DO UPDATE SET misses = misses + 1""",
+                        (fn_name,),
+                    )
+                conn.commit()
+            finally:
+                conn.close()
+
+    def get_stats(self, fn_name: str) -> tuple[int, int]:
+        """Get (hits, misses) for a function.
+        """
+        with self._sync_lock:
+            conn = self._get_sync_connection()
+            try:
+                cursor = conn.execute(
+                    'SELECT hits, misses FROM cache_stats WHERE fn_name = ?',
+                    (fn_name,),
+                )
+                row = cursor.fetchone()
+                return (row[0], row[1]) if row else (0, 0)
+            finally:
+                conn.close()
+
+    def clear_stats(self, fn_name: str | None = None) -> None:
+        """Clear stats for a function, or all stats if fn_name is None.
+        """
+        with self._sync_lock:
+            conn = self._get_sync_connection()
+            try:
+                if fn_name:
+                    conn.execute('DELETE FROM cache_stats WHERE fn_name = ?', (fn_name,))
+                else:
+                    conn.execute('DELETE FROM cache_stats')
+                conn.commit()
+            finally:
+                conn.close()
+
     # ===== Async interface =====
 
     async def aget(self, key: str) -> Any:
@@ -474,6 +543,51 @@ class SqliteBackend(Backend):
             await conn.execute('DELETE FROM cache WHERE expires_at <= ?', (now,))
             await conn.commit()
             return count
+
+    # ===== Stats interface (async) =====
+
+    async def aincr_stat(self, fn_name: str, stat: Literal['hits', 'misses']) -> None:
+        """Async increment a stat counter for a function.
+        """
+        async with self._async_write_lock:
+            conn = await self._ensure_async_initialized()
+            if stat == 'hits':
+                await conn.execute(
+                    """INSERT INTO cache_stats (fn_name, hits, misses)
+                       VALUES (?, 1, 0)
+                       ON CONFLICT(fn_name) DO UPDATE SET hits = hits + 1""",
+                    (fn_name,),
+                )
+            else:
+                await conn.execute(
+                    """INSERT INTO cache_stats (fn_name, hits, misses)
+                       VALUES (?, 0, 1)
+                       ON CONFLICT(fn_name) DO UPDATE SET misses = misses + 1""",
+                    (fn_name,),
+                )
+            await conn.commit()
+
+    async def aget_stats(self, fn_name: str) -> tuple[int, int]:
+        """Async get (hits, misses) for a function.
+        """
+        conn = await self._ensure_async_initialized()
+        cursor = await conn.execute(
+            'SELECT hits, misses FROM cache_stats WHERE fn_name = ?',
+            (fn_name,),
+        )
+        row = await cursor.fetchone()
+        return (row[0], row[1]) if row else (0, 0)
+
+    async def aclear_stats(self, fn_name: str | None = None) -> None:
+        """Async clear stats for a function, or all stats if fn_name is None.
+        """
+        async with self._async_write_lock:
+            conn = await self._ensure_async_initialized()
+            if fn_name:
+                await conn.execute('DELETE FROM cache_stats WHERE fn_name = ?', (fn_name,))
+            else:
+                await conn.execute('DELETE FROM cache_stats')
+            await conn.commit()
 
     # ===== Lifecycle =====
 
