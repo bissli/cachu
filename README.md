@@ -58,6 +58,43 @@ cachu.configure(
 | `file_dir`   | `'/tmp'`                     | Directory for file-based caches                               |
 | `redis_url`  | `'redis://localhost:6379/0'` | Redis connection URL (supports `rediss://` for TLS)           |
 
+### Using Multiple Backends
+
+You only need one `configure()` call even when using different backends across your application.
+The `configure()` function sets shared settings and a default backend. Individual decorators
+can override the backend:
+
+```python
+import cachu
+
+# Configure shared settings once at startup
+cachu.configure(
+    backend='memory',                     # Default backend
+    redis_url='redis://myserver:6379/0',  # Used when backend='redis'
+    file_dir='/var/cache/app',            # Used when backend='file'
+    key_prefix='v1:'                      # Applied to all backends
+)
+
+# Use different backends per-function
+@cachu.cache(ttl=60)                      # Uses default (memory)
+def get_session(session_id: str) -> dict:
+    return fetch_session(session_id)
+
+@cachu.cache(ttl=3600, backend='file')    # Uses file backend
+def get_config(name: str) -> dict:
+    return load_config(name)
+
+@cachu.cache(ttl=86400, backend='redis')  # Uses redis backend
+def get_user(user_id: int) -> dict:
+    return fetch_user(user_id)
+```
+
+**Key points:**
+- `redis_url` is used whenever `backend='redis'` is specified
+- `file_dir` is used whenever `backend='file'` is specified
+- `key_prefix` applies to all backends
+- The `backend` in `configure()` is just the default when not specified in the decorator
+
 ### Package Isolation
 
 Each package automatically gets isolated configuration, preventing conflicts when multiple libraries use cachu:
