@@ -61,12 +61,18 @@ def _pack_value(value: Any, created_at: float) -> bytes:
     return metadata + pickled
 
 
-def _unpack_value(data: bytes) -> tuple[Any, float]:
+def _unpack_value(data: bytes) -> tuple[Any, float] | None:
     """Unpack value and creation timestamp.
+
+    Returns None if data is corrupted (per dogpile.cache behavior: treat
+    deserialization errors as cache misses for graceful degradation).
     """
-    created_at = struct.unpack(_METADATA_FORMAT, data[:_METADATA_SIZE])[0]
-    value = pickle.loads(data[_METADATA_SIZE:])
-    return value, created_at
+    try:
+        created_at = struct.unpack(_METADATA_FORMAT, data[:_METADATA_SIZE])[0]
+        value = pickle.loads(data[_METADATA_SIZE:])
+        return value, created_at
+    except (pickle.UnpicklingError, EOFError, TypeError, AttributeError, ModuleNotFoundError, struct.error):
+        return None
 
 
 class RedisBackend(Backend):
@@ -98,22 +104,28 @@ class RedisBackend(Backend):
     # ===== Sync interface =====
 
     def get(self, key: str) -> Any:
-        """Get value by key. Returns NO_VALUE if not found.
+        """Get value by key. Returns NO_VALUE if not found or corrupted.
         """
         data = self.client.get(key)
         if data is None:
             return NO_VALUE
-        value, _ = _unpack_value(data)
-        return value
+        result = _unpack_value(data)
+        if result is None:
+            self.client.delete(key)
+            return NO_VALUE
+        return result[0]
 
     def get_with_metadata(self, key: str) -> tuple[Any, float | None]:
-        """Get value and creation timestamp. Returns (NO_VALUE, None) if not found.
+        """Get value and creation timestamp. Returns (NO_VALUE, None) if not found or corrupted.
         """
         data = self.client.get(key)
         if data is None:
             return NO_VALUE, None
-        value, created_at = _unpack_value(data)
-        return value, created_at
+        result = _unpack_value(data)
+        if result is None:
+            self.client.delete(key)
+            return NO_VALUE, None
+        return result
 
     def set(self, key: str, value: Any, ttl: int) -> None:
         """Set value with TTL in seconds.
@@ -159,24 +171,30 @@ class RedisBackend(Backend):
     # ===== Async interface =====
 
     async def aget(self, key: str) -> Any:
-        """Async get value by key. Returns NO_VALUE if not found.
+        """Async get value by key. Returns NO_VALUE if not found or corrupted.
         """
         client = self._get_async_client()
         data = await client.get(key)
         if data is None:
             return NO_VALUE
-        value, _ = _unpack_value(data)
-        return value
+        result = _unpack_value(data)
+        if result is None:
+            await client.delete(key)
+            return NO_VALUE
+        return result[0]
 
     async def aget_with_metadata(self, key: str) -> tuple[Any, float | None]:
-        """Async get value and creation timestamp. Returns (NO_VALUE, None) if not found.
+        """Async get value and creation timestamp. Returns (NO_VALUE, None) if not found or corrupted.
         """
         client = self._get_async_client()
         data = await client.get(key)
         if data is None:
             return NO_VALUE, None
-        value, created_at = _unpack_value(data)
-        return value, created_at
+        result = _unpack_value(data)
+        if result is None:
+            await client.delete(key)
+            return NO_VALUE, None
+        return result
 
     async def aset(self, key: str, value: Any, ttl: int) -> None:
         """Async set value with TTL in seconds.
