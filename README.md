@@ -51,12 +51,12 @@ cachu.configure(
 
 ### Configuration Options
 
-| Option       | Default                      | Description                                       |
-| ------------ | ---------------------------- | ------------------------------------------------- |
-| `backend`    | `'memory'`                   | Default backend type                              |
-| `key_prefix` | `''`                         | Prefix for all cache keys (useful for versioning) |
-| `file_dir`   | `'/tmp'`                     | Directory for file-based caches                   |
-| `redis_url`  | `'redis://localhost:6379/0'` | Redis connection URL                              |
+| Option       | Default                      | Description                                                   |
+| ------------ | ---------------------------- | ------------------------------------------------------------- |
+| `backend`    | `'memory'`                   | Default backend: `'memory'`, `'file'`, `'redis'`, or `'null'` |
+| `key_prefix` | `''`                         | Prefix for all cache keys (useful for versioning)             |
+| `file_dir`   | `'/tmp'`                     | Directory for file-based caches                               |
+| `redis_url`  | `'redis://localhost:6379/0'` | Redis connection URL (supports `rediss://` for TLS)           |
 
 ### Package Isolation
 
@@ -122,6 +122,11 @@ def load_config(name: str) -> dict:
 @cache(ttl=86400, backend='redis')
 def fetch_external_data(api_key: str) -> dict:
     return call_external_api(api_key)
+
+# Null cache (passthrough, for testing)
+@cache(ttl=300, backend='null')
+def always_fresh(key: str) -> str:
+    return fetch(key)  # Always executes, never caches
 ```
 
 ### Tags for Grouping
@@ -141,6 +146,27 @@ def get_product(product_id: int) -> dict:
 
 # Clear only user caches
 cache_clear(tag='users', backend='memory', ttl=300)
+```
+
+### Dynamic TTL
+
+Use a callable to compute TTL based on the result:
+
+```python
+# TTL from result field
+@cache(ttl=lambda result: result.get('cache_seconds', 300))
+def get_config(key: str) -> dict:
+    return fetch_config(key)  # Returns {'value': ..., 'cache_seconds': 600}
+
+# Different TTL for different result types
+def compute_ttl(result: dict) -> int:
+    if result.get('is_stable'):
+        return 3600  # Cache stable data for 1 hour
+    return 60  # Cache volatile data for 1 minute
+
+@cache(ttl=compute_ttl)
+def get_data(id: int) -> dict:
+    return fetch(id)
 ```
 
 ### Conditional Caching
@@ -200,6 +226,46 @@ result = get_data(123, _skip_cache=True)
 
 # Force refresh - execute and overwrite cached value
 result = get_data(123, _overwrite_cache=True)
+```
+
+### Decorator Helper Methods
+
+Decorated functions have helper methods attached:
+
+```python
+@cache(ttl=300)
+def get_user(user_id: int) -> dict:
+    return fetch_user(user_id)
+
+# .get() - retrieve cached value without calling the function
+cached = get_user.get(user_id=123)           # Raises KeyError if not cached
+cached = get_user.get(default=None, user_id=123)  # Returns None if not cached
+
+# .set() - store a value directly in the cache
+get_user.set({'id': 123, 'name': 'Test'}, user_id=123)
+
+# .invalidate() - remove a specific entry from cache
+get_user.invalidate(user_id=123)
+
+# .refresh() - invalidate and re-fetch
+user = get_user.refresh(user_id=123)
+
+# .original() - call the original function, bypassing cache entirely
+user = get_user.original(123)  # Always fetches, doesn't read or write cache
+```
+
+These methods also work with async functions:
+
+```python
+@cache(ttl=300)
+async def get_user(user_id: int) -> dict:
+    return await fetch_user(user_id)
+
+cached = await get_user.get(user_id=123)
+await get_user.set({'id': 123}, user_id=123)
+await get_user.invalidate(user_id=123)
+user = await get_user.refresh(user_id=123)
+user = await get_user.original(123)
 ```
 
 ### Cache Statistics
@@ -440,14 +506,16 @@ from cachu import (
 
 ## Features
 
-- **Multiple backends**: Memory, file (SQLite), and Redis
+- **Multiple backends**: Memory, file (SQLite), Redis, and null (passthrough)
 - **Async support**: Full async/await API with `@async_cache` decorator
-- **Flexible TTL**: Configure different TTLs for different use cases
+- **Flexible TTL**: Static or dynamic TTL (callable that receives result)
 - **Tags**: Organize and selectively clear cache entries
 - **Package isolation**: Each package gets isolated configuration
 - **Conditional caching**: Cache based on result value
 - **Validation callbacks**: Validate entries before returning
 - **Per-call control**: Skip or overwrite cache per call
+- **Helper methods**: `.get()`, `.set()`, `.invalidate()`, `.refresh()`, `.original()` on decorated functions
 - **Statistics**: Track hits, misses, and cache size
 - **Intelligent filtering**: Auto-excludes `self`, `cls`, connections, and `_` params
 - **Global disable**: Bypass all caching for testing
+- **Redis TLS**: Supports `rediss://` URLs for secure connections
