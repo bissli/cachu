@@ -135,6 +135,7 @@ def cache_clear(
     if backend is not None and ttl is not None:
         backend_instance = manager.get_backend(package, backend, ttl)
         cleared = backend_instance.clear(pattern)
+        backend_instance.clear_stats()
         if cleared > 0:
             total_cleared += cleared
             logger.debug(f'Cleared {cleared} entries from {backend} backend (ttl={ttl})')
@@ -149,12 +150,10 @@ def cache_clear(
                     continue
 
                 cleared = backend_instance.clear(pattern)
+                backend_instance.clear_stats()
                 if cleared > 0:
                     total_cleared += cleared
                     logger.debug(f'Cleared {cleared} entries from {btype} backend (ttl={bttl})')
-
-    with manager._stats_lock:
-        manager.stats.clear()
 
     return total_cleared
 
@@ -290,6 +289,7 @@ async def async_cache_clear(
     if backend is not None and ttl is not None:
         backend_instance = await manager.aget_backend(package, backend, ttl)
         cleared = await backend_instance.aclear(pattern)
+        await backend_instance.aclear_stats()
         if cleared > 0:
             total_cleared += cleared
             logger.debug(f'Cleared {cleared} entries from {backend} backend (ttl={ttl})')
@@ -304,12 +304,10 @@ async def async_cache_clear(
                     continue
 
                 cleared = await backend_instance.aclear(pattern)
+                await backend_instance.aclear_stats()
                 if cleared > 0:
                     total_cleared += cleared
                     logger.debug(f'Cleared {cleared} entries from {btype} backend (ttl={bttl})')
-
-    with manager._stats_lock:
-        manager.stats.clear()
 
     return total_cleared
 
