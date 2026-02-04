@@ -294,7 +294,7 @@ async def async_cache_clear(
             total_cleared += cleared
             logger.debug(f'Cleared {cleared} entries from {backend} backend (ttl={ttl})')
     else:
-        async with manager._get_async_lock():
+        async with manager._async_lock:
             for (pkg, btype, bttl), backend_instance in list(manager.backends.items()):
                 if pkg != package:
                     continue
