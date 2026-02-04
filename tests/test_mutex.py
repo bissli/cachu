@@ -156,6 +156,44 @@ class TestAsyncioMutex:
             await mutex1.release()
 
 
+class TestMutexSafety:
+    """Tests for mutex _acquired flag safety checks.
+    """
+
+    def test_threading_release_without_acquire_is_noop(self):
+        """Verify ThreadingMutex.release() without acquire does nothing.
+        """
+        mutex = ThreadingMutex('safety_test_1')
+        mutex.release()
+
+    def test_threading_double_release_is_noop(self):
+        """Verify ThreadingMutex double release does nothing.
+        """
+        mutex = ThreadingMutex('safety_test_2')
+        mutex.acquire()
+        mutex.release()
+        mutex.release()
+
+
+class TestAsyncMutexSafety:
+    """Tests for async mutex _acquired flag safety checks.
+    """
+
+    async def test_asyncio_release_without_acquire_is_noop(self):
+        """Verify AsyncioMutex.release() without acquire does nothing.
+        """
+        mutex = AsyncioMutex('async_safety_test_1')
+        await mutex.release()
+
+    async def test_asyncio_double_release_is_noop(self):
+        """Verify AsyncioMutex double release does nothing.
+        """
+        mutex = AsyncioMutex('async_safety_test_2')
+        await mutex.acquire()
+        await mutex.release()
+        await mutex.release()
+
+
 class TestAsyncioMutexThreadSafety:
     """Tests for AsyncioMutex thread-safety during creation.
     """
@@ -186,7 +224,7 @@ class TestAsyncioMutexThreadSafety:
             t.join()
 
         locks = [m._lock for m in mutexes]
-        unique_locks = len(set(id(lock) for lock in locks))
+        unique_locks = len({id(lock) for lock in locks})
         assert unique_locks == 1, (
             f'Race condition detected: {unique_locks} different locks created for same key'
         )
