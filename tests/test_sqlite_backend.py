@@ -161,3 +161,72 @@ def test_sqlite_backend_cleanup_expired(sqlite_backend):
 
     assert result1 is NO_VALUE
     assert result2 == 'value2'
+
+
+def test_sqlite_backend_incr_stat(sqlite_backend):
+    """Verify SQLite backend can increment stats.
+    """
+    sqlite_backend.incr_stat('my_func', 'hits')
+    sqlite_backend.incr_stat('my_func', 'hits')
+    sqlite_backend.incr_stat('my_func', 'misses')
+
+    hits, misses = sqlite_backend.get_stats('my_func')
+    assert hits == 2
+    assert misses == 1
+
+
+def test_sqlite_backend_get_stats_unknown_function(sqlite_backend):
+    """Verify SQLite backend returns (0, 0) for unknown functions.
+    """
+    hits, misses = sqlite_backend.get_stats('unknown_func')
+    assert hits == 0
+    assert misses == 0
+
+
+def test_sqlite_backend_clear_stats_specific(sqlite_backend):
+    """Verify SQLite backend can clear stats for specific function.
+    """
+    sqlite_backend.incr_stat('func1', 'hits')
+    sqlite_backend.incr_stat('func2', 'hits')
+
+    sqlite_backend.clear_stats('func1')
+
+    assert sqlite_backend.get_stats('func1') == (0, 0)
+    assert sqlite_backend.get_stats('func2') == (1, 0)
+
+
+def test_sqlite_backend_clear_stats_all(sqlite_backend):
+    """Verify SQLite backend can clear all stats.
+    """
+    sqlite_backend.incr_stat('func1', 'hits')
+    sqlite_backend.incr_stat('func2', 'misses')
+
+    sqlite_backend.clear_stats()
+
+    assert sqlite_backend.get_stats('func1') == (0, 0)
+    assert sqlite_backend.get_stats('func2') == (0, 0)
+
+
+@pytest.mark.asyncio
+async def test_sqlite_backend_async_incr_stat(sqlite_backend):
+    """Verify SQLite backend async stats increment.
+    """
+    await sqlite_backend.aincr_stat('async_func', 'hits')
+    await sqlite_backend.aincr_stat('async_func', 'misses')
+    await sqlite_backend.aincr_stat('async_func', 'misses')
+
+    hits, misses = await sqlite_backend.aget_stats('async_func')
+    assert hits == 1
+    assert misses == 2
+
+
+@pytest.mark.asyncio
+async def test_sqlite_backend_async_clear_stats(sqlite_backend):
+    """Verify SQLite backend async stats clearing.
+    """
+    await sqlite_backend.aincr_stat('func1', 'hits')
+    await sqlite_backend.aclear_stats('func1')
+
+    hits, misses = await sqlite_backend.aget_stats('func1')
+    assert hits == 0
+    assert misses == 0
