@@ -114,7 +114,7 @@ class ConfigRegistry:
         """
         if 'backend' in kwargs:
             backend = kwargs['backend']
-            valid_backends = ('memory', 'redis', 'file')
+            valid_backends = ('memory', 'redis', 'file', 'null')
             if backend not in valid_backends:
                 raise ValueError(f'backend must be one of {valid_backends}, got {backend!r}')
 
