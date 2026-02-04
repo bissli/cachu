@@ -18,6 +18,8 @@ from .types import CacheEntry, CacheInfo, CacheMeta
 
 logger = logging.getLogger(__name__)
 
+_MISSING = object()
+
 
 class CacheManager:
     """Unified manager for cache backends and statistics.
@@ -58,6 +60,9 @@ class CacheManager:
         elif backend_type == 'redis':
             from .backends.redis import RedisBackend
             backend = RedisBackend(cfg.redis_url, cfg.lock_timeout)
+        elif backend_type == 'null':
+            from .backends.null import NullBackend
+            backend = NullBackend()
         else:
             raise ValueError(f'Unknown backend type: {backend_type}')
 
@@ -213,8 +218,9 @@ def _attach_helpers(
     resolved_backend: str,
     ttl: int,
     is_async: bool,
+    original_fn: Callable[..., Any],
 ) -> None:
-    """Attach .invalidate() and .refresh() methods to wrapper.
+    """Attach helper methods to wrapper (.invalidate, .refresh, .get, .set, .original).
     """
     if is_async:
         async def invalidate(**kwargs: Any) -> None:
@@ -227,8 +233,31 @@ def _attach_helpers(
             await invalidate(**kwargs)
             return await wrapper(**kwargs)
 
-        wrapper.invalidate = invalidate  # type: ignore
-        wrapper.refresh = refresh  # type: ignore
+        async def get(default: Any = _MISSING, **kwargs: Any) -> Any:
+            backend = await manager.aget_backend(resolved_package, resolved_backend, ttl)
+            cfg = get_config(resolved_package)
+            cache_key = mangle_key(key_generator(**kwargs), cfg.key_prefix, ttl)
+            value = await backend.aget(cache_key)
+            if value is NO_VALUE:
+                if default is _MISSING:
+                    raise KeyError(f'No cached value for key {cache_key}')
+                return default
+            return value
+
+        async def set(value: Any, **kwargs: Any) -> None:
+            backend = await manager.aget_backend(resolved_package, resolved_backend, ttl)
+            cfg = get_config(resolved_package)
+            cache_key = mangle_key(key_generator(**kwargs), cfg.key_prefix, ttl)
+            await backend.aset(cache_key, value, ttl)
+
+        async def original(*args: Any, **kwargs: Any) -> Any:
+            return await original_fn(*args, **kwargs)
+
+        wrapper.invalidate = invalidate
+        wrapper.refresh = refresh
+        wrapper.get = get
+        wrapper.set = set
+        wrapper.original = original
     else:
         def invalidate(**kwargs: Any) -> None:
             backend = manager.get_backend(resolved_package, resolved_backend, ttl)
@@ -240,12 +269,35 @@ def _attach_helpers(
             invalidate(**kwargs)
             return wrapper(**kwargs)
 
-        wrapper.invalidate = invalidate  # type: ignore
-        wrapper.refresh = refresh  # type: ignore
+        def get(default: Any = _MISSING, **kwargs: Any) -> Any:
+            backend = manager.get_backend(resolved_package, resolved_backend, ttl)
+            cfg = get_config(resolved_package)
+            cache_key = mangle_key(key_generator(**kwargs), cfg.key_prefix, ttl)
+            value = backend.get(cache_key)
+            if value is NO_VALUE:
+                if default is _MISSING:
+                    raise KeyError(f'No cached value for key {cache_key}')
+                return default
+            return value
+
+        def set(value: Any, **kwargs: Any) -> None:
+            backend = manager.get_backend(resolved_package, resolved_backend, ttl)
+            cfg = get_config(resolved_package)
+            cache_key = mangle_key(key_generator(**kwargs), cfg.key_prefix, ttl)
+            backend.set(cache_key, value, ttl)
+
+        def original(*args: Any, **kwargs: Any) -> Any:
+            return original_fn(*args, **kwargs)
+
+        wrapper.invalidate = invalidate
+        wrapper.refresh = refresh
+        wrapper.get = get
+        wrapper.set = set
+        wrapper.original = original
 
 
 def cache(
-    ttl: int = 300,
+    ttl: int | Callable[[Any], int] = 300,
     backend: str | None = None,
     tag: str = '',
     exclude: set[str] | None = None,
@@ -259,7 +311,8 @@ def cache(
     Includes dogpile prevention using per-key mutexes.
 
     Args:
-        ttl: Time-to-live in seconds (default: 300)
+        ttl: Time-to-live in seconds (default: 300). Can be a callable that
+             receives the result and returns the TTL (for dynamic expiration).
         backend: Backend type ('memory', 'file', 'redis'). Uses config default if None.
         tag: Tag for grouping related cache entries
         exclude: Parameter names to exclude from cache key
@@ -282,6 +335,11 @@ def cache(
         async def get_user_async(user_id: int) -> dict:
             return await fetch_user(user_id)
 
+        # Dynamic TTL based on result
+        @cache(ttl=lambda result: result.get('cache_seconds', 300))
+        def get_config(key: str) -> dict:
+            return fetch_config(key)
+
         # Normal call
         user = get_user(123)
 
@@ -297,6 +355,9 @@ def cache(
         # Refresh specific entry
         user = get_user.refresh(user_id=123)
     """
+    ttl_is_callable = callable(ttl)
+    ttl_for_backend = -1 if ttl_is_callable else ttl
+
     resolved_package = package if package is not None else _get_caller_package()
 
     if backend is None:
@@ -310,7 +371,7 @@ def cache(
         is_async = asyncio.iscoroutinefunction(fn)
 
         meta = CacheMeta(
-            ttl=ttl,
+            ttl=ttl_for_backend,
             backend=resolved_backend,
             tag=tag,
             exclude=exclude or set(),
@@ -332,12 +393,12 @@ def cache(
                 backend_inst = await manager.aget_backend(
                     resolved_package,
                     resolved_backend,
-                    ttl,
+                    ttl_for_backend,
                 )
                 cfg = get_config(resolved_package)
 
                 base_key = key_generator(*args, **kwargs)
-                cache_key = mangle_key(base_key, cfg.key_prefix, ttl)
+                cache_key = mangle_key(base_key, cfg.key_prefix, ttl_for_backend)
 
                 if not overwrite_cache:
                     value, created_at = await backend_inst.aget_with_metadata(cache_key)
@@ -359,7 +420,8 @@ def cache(
                     result = await fn(*args, **kwargs)
 
                     if cache_if is None or cache_if(result):
-                        await backend_inst.aset(cache_key, result, ttl)
+                        resolved_ttl = ttl(result) if ttl_is_callable else ttl
+                        await backend_inst.aset(cache_key, result, resolved_ttl)
                         logger.debug(f'Cached {fn.__name__} with key {cache_key}')
 
                     return result
@@ -367,9 +429,9 @@ def cache(
                     if acquired:
                         await mutex.release()
 
-            async_wrapper._cache_meta = meta  # type: ignore
-            async_wrapper._cache_key_generator = key_generator  # type: ignore
-            _attach_helpers(async_wrapper, key_generator, resolved_package, resolved_backend, ttl, is_async=True)
+            async_wrapper._cache_meta = meta
+            async_wrapper._cache_key_generator = key_generator
+            _attach_helpers(async_wrapper, key_generator, resolved_package, resolved_backend, ttl_for_backend, is_async=True, original_fn=fn)
             return async_wrapper
 
         else:
@@ -381,11 +443,11 @@ def cache(
                 if is_disabled() or skip_cache:
                     return fn(*args, **kwargs)
 
-                backend_inst = manager.get_backend(resolved_package, resolved_backend, ttl)
+                backend_inst = manager.get_backend(resolved_package, resolved_backend, ttl_for_backend)
                 cfg = get_config(resolved_package)
 
                 base_key = key_generator(*args, **kwargs)
-                cache_key = mangle_key(base_key, cfg.key_prefix, ttl)
+                cache_key = mangle_key(base_key, cfg.key_prefix, ttl_for_backend)
 
                 if not overwrite_cache:
                     value, created_at = backend_inst.get_with_metadata(cache_key)
@@ -407,7 +469,8 @@ def cache(
                     result = fn(*args, **kwargs)
 
                     if cache_if is None or cache_if(result):
-                        backend_inst.set(cache_key, result, ttl)
+                        resolved_ttl = ttl(result) if ttl_is_callable else ttl
+                        backend_inst.set(cache_key, result, resolved_ttl)
                         logger.debug(f'Cached {fn.__name__} with key {cache_key}')
 
                     return result
@@ -415,16 +478,16 @@ def cache(
                     if acquired:
                         mutex.release()
 
-            sync_wrapper._cache_meta = meta  # type: ignore
-            sync_wrapper._cache_key_generator = key_generator  # type: ignore
-            _attach_helpers(sync_wrapper, key_generator, resolved_package, resolved_backend, ttl, is_async=False)
+            sync_wrapper._cache_meta = meta
+            sync_wrapper._cache_key_generator = key_generator
+            _attach_helpers(sync_wrapper, key_generator, resolved_package, resolved_backend, ttl_for_backend, is_async=False, original_fn=fn)
             return sync_wrapper
 
     return decorator
 
 
 def async_cache(
-    ttl: int = 300,
+    ttl: int | Callable[[Any], int] = 300,
     backend: str | None = None,
     tag: str = '',
     exclude: set[str] | None = None,
