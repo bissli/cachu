@@ -239,3 +239,66 @@ def test_memory_cache_zero_ttl_recomputes_every_call():
     func(5)
     func(5)
     assert call_count == 2, "TTL=0 should cause recomputation on every call"
+
+
+def test_memory_backend_stats_direct():
+    """Verify MemoryBackend stats methods work directly.
+    """
+    from cachu.backends.memory import MemoryBackend
+
+    backend = MemoryBackend()
+
+    backend.incr_stat('test_func', 'hits')
+    backend.incr_stat('test_func', 'hits')
+    backend.incr_stat('test_func', 'misses')
+
+    hits, misses = backend.get_stats('test_func')
+    assert hits == 2
+    assert misses == 1
+
+    backend.clear_stats('test_func')
+    assert backend.get_stats('test_func') == (0, 0)
+
+
+def test_memory_backend_stats_unknown_function():
+    """Verify MemoryBackend returns (0, 0) for unknown functions.
+    """
+    from cachu.backends.memory import MemoryBackend
+
+    backend = MemoryBackend()
+    assert backend.get_stats('unknown_func') == (0, 0)
+
+
+def test_memory_backend_clear_all_stats():
+    """Verify MemoryBackend can clear all stats.
+    """
+    from cachu.backends.memory import MemoryBackend
+
+    backend = MemoryBackend()
+    backend.incr_stat('func1', 'hits')
+    backend.incr_stat('func2', 'misses')
+
+    backend.clear_stats()
+
+    assert backend.get_stats('func1') == (0, 0)
+    assert backend.get_stats('func2') == (0, 0)
+
+
+@pytest.mark.asyncio
+async def test_memory_backend_async_stats():
+    """Verify MemoryBackend async stats methods work.
+    """
+    from cachu.backends.memory import MemoryBackend
+
+    backend = MemoryBackend()
+
+    await backend.aincr_stat('async_func', 'hits')
+    await backend.aincr_stat('async_func', 'misses')
+    await backend.aincr_stat('async_func', 'misses')
+
+    hits, misses = await backend.aget_stats('async_func')
+    assert hits == 1
+    assert misses == 2
+
+    await backend.aclear_stats('async_func')
+    assert await backend.aget_stats('async_func') == (0, 0)

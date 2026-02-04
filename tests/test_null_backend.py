@@ -66,6 +66,28 @@ class TestNullBackendDirect:
         mutex = backend.get_mutex('key')
         assert isinstance(mutex, NullMutex)
 
+    def test_incr_stat_is_noop(self):
+        """Verify incr_stat() does nothing.
+        """
+        backend = NullBackend()
+        backend.incr_stat('func', 'hits')
+        backend.incr_stat('func', 'misses')
+
+    def test_get_stats_returns_zeros(self):
+        """Verify get_stats() always returns (0, 0).
+        """
+        backend = NullBackend()
+        backend.incr_stat('func', 'hits')
+        assert backend.get_stats('func') == (0, 0)
+        assert backend.get_stats('unknown') == (0, 0)
+
+    def test_clear_stats_is_noop(self):
+        """Verify clear_stats() does nothing without error.
+        """
+        backend = NullBackend()
+        backend.clear_stats('func')
+        backend.clear_stats()
+
 
 class TestNullBackendAsync:
     """Tests for NullBackend async API.
@@ -127,6 +149,28 @@ class TestNullBackendAsync:
         backend = NullBackend()
         mutex = backend.get_async_mutex('key')
         assert isinstance(mutex, NullAsyncMutex)
+
+    async def test_aincr_stat_is_noop(self):
+        """Verify aincr_stat() does nothing.
+        """
+        backend = NullBackend()
+        await backend.aincr_stat('func', 'hits')
+        await backend.aincr_stat('func', 'misses')
+
+    async def test_aget_stats_returns_zeros(self):
+        """Verify aget_stats() always returns (0, 0).
+        """
+        backend = NullBackend()
+        await backend.aincr_stat('func', 'hits')
+        assert await backend.aget_stats('func') == (0, 0)
+        assert await backend.aget_stats('unknown') == (0, 0)
+
+    async def test_aclear_stats_is_noop(self):
+        """Verify aclear_stats() does nothing without error.
+        """
+        backend = NullBackend()
+        await backend.aclear_stats('func')
+        await backend.aclear_stats()
 
 
 class TestNullBackendWithDecorator:
