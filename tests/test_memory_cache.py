@@ -1,6 +1,9 @@
 """Test memory cache backend operations.
 """
+import time
+
 import cachu
+import pytest
 
 
 def test_memory_cache_basic_decoration():
@@ -146,3 +149,26 @@ def test_memory_cache_info():
     info = cachu.cache_info(func)
     assert info.hits == 2
     assert info.misses == 2
+
+
+@pytest.mark.slow
+def test_memory_cache_ttl_expiration():
+    """Verify cached values expire after TTL.
+    """
+    call_count = 0
+
+    @cachu.cache(ttl=1, backend='memory')
+    def func(x: int) -> int:
+        nonlocal call_count
+        call_count += 1
+        return x * 2
+
+    func(5)
+    assert call_count == 1
+    func(5)
+    assert call_count == 1
+
+    time.sleep(1.5)
+
+    func(5)
+    assert call_count == 2

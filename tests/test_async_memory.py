@@ -18,7 +18,7 @@ async def test_async_memory_cache_basic_decoration():
     """
     call_count = 0
 
-    @cachu.async_cache(ttl=300, backend='memory')
+    @cachu.cache(ttl=300, backend='memory')
     async def expensive_func(x: int) -> int:
         nonlocal call_count
         call_count += 1
@@ -37,7 +37,7 @@ async def test_async_memory_cache_different_args():
     """
     call_count = 0
 
-    @cachu.async_cache(ttl=300, backend='memory')
+    @cachu.cache(ttl=300, backend='memory')
     async def func(x: int) -> int:
         nonlocal call_count
         call_count += 1
@@ -52,7 +52,7 @@ async def test_async_memory_cache_different_args():
 async def test_async_memory_cache_with_tag():
     """Verify tag parameter is accepted and used.
     """
-    @cachu.async_cache(ttl=300, backend='memory', tag='users')
+    @cachu.cache(ttl=300, backend='memory', tag='users')
     async def get_user(user_id: int) -> dict:
         return {'id': user_id, 'name': 'test'}
 
@@ -65,7 +65,7 @@ async def test_async_memory_cache_cache_if():
     """
     call_count = 0
 
-    @cachu.async_cache(ttl=300, backend='memory', cache_if=lambda r: r is not None)
+    @cachu.cache(ttl=300, backend='memory', cache_if=lambda r: r is not None)
     async def get_value(x: int) -> int | None:
         nonlocal call_count
         call_count += 1
@@ -84,7 +84,7 @@ async def test_async_memory_cache_with_kwargs():
     """
     call_count = 0
 
-    @cachu.async_cache(ttl=300, backend='memory')
+    @cachu.cache(ttl=300, backend='memory')
     async def func(x: int, y: int = 10) -> int:
         nonlocal call_count
         call_count += 1
@@ -103,7 +103,7 @@ async def test_async_memory_cache_skip_cache():
     """
     call_count = 0
 
-    @cachu.async_cache(ttl=300, backend='memory')
+    @cachu.cache(ttl=300, backend='memory')
     async def func(x: int) -> int:
         nonlocal call_count
         call_count += 1
@@ -122,7 +122,7 @@ async def test_async_memory_cache_overwrite_cache():
     """
     counter = [0]
 
-    @cachu.async_cache(ttl=300, backend='memory')
+    @cachu.cache(ttl=300, backend='memory')
     async def func(x: int) -> int:
         counter[0] += 1
         return x * counter[0]
@@ -143,7 +143,7 @@ async def test_async_memory_cache_overwrite_cache():
 async def test_async_memory_cache_info():
     """Verify async_cache_info returns statistics.
     """
-    @cachu.async_cache(ttl=300, backend='memory')
+    @cachu.cache(ttl=300, backend='memory')
     async def func(x: int) -> int:
         return x * 2
 

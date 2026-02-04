@@ -8,195 +8,197 @@ import time
 from collections.abc import AsyncIterator, Iterator
 from typing import Any
 
-from . import NO_VALUE, AsyncBackend, Backend
+from ..mutex import AsyncioMutex, CacheMutex, ThreadingMutex
+from . import NO_VALUE, Backend
 
 
 class MemoryBackend(Backend):
-    """Thread-safe in-memory cache backend.
+    """Thread-safe in-memory cache backend with both sync and async interfaces.
     """
 
     def __init__(self) -> None:
         self._cache: dict[str, tuple[bytes, float, float]] = {}
-        self._lock = threading.RLock()
+        self._sync_lock = threading.RLock()
+        self._async_lock: asyncio.Lock | None = None
+
+    def _get_async_lock(self) -> asyncio.Lock:
+        """Lazy-create async lock (must be called from async context).
+        """
+        if self._async_lock is None:
+            self._async_lock = asyncio.Lock()
+        return self._async_lock
+
+    # ===== Core logic (no locking) =====
+
+    def _do_get(self, key: str) -> tuple[Any, float | None]:
+        """Get value and metadata without locking.
+        """
+        entry = self._cache.get(key)
+        if entry is None:
+            return NO_VALUE, None
+
+        pickled_value, created_at, expires_at = entry
+        if time.time() > expires_at:
+            del self._cache[key]
+            return NO_VALUE, None
+
+        return pickle.loads(pickled_value), created_at
+
+    def _do_set(self, key: str, value: Any, ttl: int) -> None:
+        """Set value without locking.
+        """
+        now = time.time()
+        pickled_value = pickle.dumps(value)
+        self._cache[key] = (pickled_value, now, now + ttl)
+
+    def _do_delete(self, key: str) -> None:
+        """Delete value without locking.
+        """
+        self._cache.pop(key, None)
+
+    def _do_clear(self, pattern: str | None = None) -> int:
+        """Clear entries matching pattern without locking.
+        """
+        if pattern is None:
+            count = len(self._cache)
+            self._cache.clear()
+            return count
+
+        keys_to_delete = [k for k in self._cache if fnmatch.fnmatch(k, pattern)]
+        for key in keys_to_delete:
+            del self._cache[key]
+        return len(keys_to_delete)
+
+    def _do_keys(self, pattern: str | None = None) -> list[str]:
+        """Get keys matching pattern without locking (returns snapshot).
+        """
+        now = time.time()
+        result = []
+        keys_to_delete = []
+
+        for key, entry in list(self._cache.items()):
+            _, _, expires_at = entry
+            if now > expires_at:
+                keys_to_delete.append(key)
+                continue
+            if pattern is None or fnmatch.fnmatch(key, pattern):
+                result.append(key)
+
+        for key in keys_to_delete:
+            self._cache.pop(key, None)
+
+        return result
+
+    # ===== Sync interface =====
 
     def get(self, key: str) -> Any:
         """Get value by key. Returns NO_VALUE if not found or expired.
         """
-        with self._lock:
-            entry = self._cache.get(key)
-            if entry is None:
-                return NO_VALUE
-
-            pickled_value, created_at, expires_at = entry
-            if time.time() > expires_at:
-                del self._cache[key]
-                return NO_VALUE
-
-            return pickle.loads(pickled_value)
+        with self._sync_lock:
+            value, _ = self._do_get(key)
+            return value
 
     def get_with_metadata(self, key: str) -> tuple[Any, float | None]:
         """Get value and creation timestamp. Returns (NO_VALUE, None) if not found.
         """
-        with self._lock:
-            entry = self._cache.get(key)
-            if entry is None:
-                return NO_VALUE, None
-
-            pickled_value, created_at, expires_at = entry
-            if time.time() > expires_at:
-                del self._cache[key]
-                return NO_VALUE, None
-
-            return pickle.loads(pickled_value), created_at
+        with self._sync_lock:
+            return self._do_get(key)
 
     def set(self, key: str, value: Any, ttl: int) -> None:
         """Set value with TTL in seconds.
         """
-        now = time.time()
-        pickled_value = pickle.dumps(value)
-        with self._lock:
-            self._cache[key] = (pickled_value, now, now + ttl)
+        with self._sync_lock:
+            self._do_set(key, value, ttl)
 
     def delete(self, key: str) -> None:
         """Delete value by key.
         """
-        with self._lock:
-            self._cache.pop(key, None)
+        with self._sync_lock:
+            self._do_delete(key)
 
     def clear(self, pattern: str | None = None) -> int:
         """Clear entries matching pattern. Returns count of cleared entries.
         """
-        with self._lock:
-            if pattern is None:
-                count = len(self._cache)
-                self._cache.clear()
-                return count
-
-            keys_to_delete = [k for k in self._cache if fnmatch.fnmatch(k, pattern)]
-            for key in keys_to_delete:
-                del self._cache[key]
-            return len(keys_to_delete)
+        with self._sync_lock:
+            return self._do_clear(pattern)
 
     def keys(self, pattern: str | None = None) -> Iterator[str]:
         """Iterate over keys matching pattern.
         """
-        now = time.time()
-        with self._lock:
-            all_keys = list(self._cache.keys())
-
-        for key in all_keys:
-            with self._lock:
-                entry = self._cache.get(key)
-                if entry is None:
-                    continue
-                _, _, expires_at = entry
-                if now > expires_at:
-                    del self._cache[key]
-                    continue
-
-            if pattern is None or fnmatch.fnmatch(key, pattern):
-                yield key
+        with self._sync_lock:
+            all_keys = self._do_keys(pattern)
+        yield from all_keys
 
     def count(self, pattern: str | None = None) -> int:
         """Count keys matching pattern.
         """
-        return sum(1 for _ in self.keys(pattern))
+        with self._sync_lock:
+            return len(self._do_keys(pattern))
 
-
-class AsyncMemoryBackend(AsyncBackend):
-    """Async in-memory cache backend using asyncio.Lock.
-    """
-
-    def __init__(self) -> None:
-        self._cache: dict[str, tuple[bytes, float, float]] = {}
-        self._lock = asyncio.Lock()
-
-    async def get(self, key: str) -> Any:
-        """Get value by key. Returns NO_VALUE if not found or expired.
+    def get_mutex(self, key: str) -> CacheMutex:
+        """Get a mutex for dogpile prevention on the given key.
         """
-        async with self._lock:
-            entry = self._cache.get(key)
-            if entry is None:
-                return NO_VALUE
+        return ThreadingMutex(f'memory:{key}')
 
-            pickled_value, created_at, expires_at = entry
-            if time.time() > expires_at:
-                del self._cache[key]
-                return NO_VALUE
+    # ===== Async interface =====
 
-            return pickle.loads(pickled_value)
-
-    async def get_with_metadata(self, key: str) -> tuple[Any, float | None]:
-        """Get value and creation timestamp. Returns (NO_VALUE, None) if not found.
+    async def aget(self, key: str) -> Any:
+        """Async get value by key. Returns NO_VALUE if not found or expired.
         """
-        async with self._lock:
-            entry = self._cache.get(key)
-            if entry is None:
-                return NO_VALUE, None
+        async with self._get_async_lock():
+            value, _ = self._do_get(key)
+            return value
 
-            pickled_value, created_at, expires_at = entry
-            if time.time() > expires_at:
-                del self._cache[key]
-                return NO_VALUE, None
-
-            return pickle.loads(pickled_value), created_at
-
-    async def set(self, key: str, value: Any, ttl: int) -> None:
-        """Set value with TTL in seconds.
+    async def aget_with_metadata(self, key: str) -> tuple[Any, float | None]:
+        """Async get value and creation timestamp. Returns (NO_VALUE, None) if not found.
         """
-        now = time.time()
-        pickled_value = pickle.dumps(value)
-        async with self._lock:
-            self._cache[key] = (pickled_value, now, now + ttl)
+        async with self._get_async_lock():
+            return self._do_get(key)
 
-    async def delete(self, key: str) -> None:
-        """Delete value by key.
+    async def aset(self, key: str, value: Any, ttl: int) -> None:
+        """Async set value with TTL in seconds.
         """
-        async with self._lock:
-            self._cache.pop(key, None)
+        async with self._get_async_lock():
+            self._do_set(key, value, ttl)
 
-    async def clear(self, pattern: str | None = None) -> int:
-        """Clear entries matching pattern. Returns count of cleared entries.
+    async def adelete(self, key: str) -> None:
+        """Async delete value by key.
         """
-        async with self._lock:
-            if pattern is None:
-                count = len(self._cache)
-                self._cache.clear()
-                return count
+        async with self._get_async_lock():
+            self._do_delete(key)
 
-            keys_to_delete = [k for k in self._cache if fnmatch.fnmatch(k, pattern)]
-            for key in keys_to_delete:
-                del self._cache[key]
-            return len(keys_to_delete)
-
-    async def keys(self, pattern: str | None = None) -> AsyncIterator[str]:
-        """Iterate over keys matching pattern.
+    async def aclear(self, pattern: str | None = None) -> int:
+        """Async clear entries matching pattern. Returns count of cleared entries.
         """
-        now = time.time()
-        async with self._lock:
-            all_keys = list(self._cache.keys())
+        async with self._get_async_lock():
+            return self._do_clear(pattern)
+
+    async def akeys(self, pattern: str | None = None) -> AsyncIterator[str]:
+        """Async iterate over keys matching pattern.
+        """
+        async with self._get_async_lock():
+            all_keys = self._do_keys(pattern)
 
         for key in all_keys:
-            async with self._lock:
-                entry = self._cache.get(key)
-                if entry is None:
-                    continue
-                _, _, expires_at = entry
-                if now > expires_at:
-                    del self._cache[key]
-                    continue
+            yield key
 
-            if pattern is None or fnmatch.fnmatch(key, pattern):
-                yield key
-
-    async def count(self, pattern: str | None = None) -> int:
-        """Count keys matching pattern.
+    async def acount(self, pattern: str | None = None) -> int:
+        """Async count keys matching pattern.
         """
-        count = 0
-        async for _ in self.keys(pattern):
-            count += 1
-        return count
+        async with self._get_async_lock():
+            return len(self._do_keys(pattern))
 
-    async def close(self) -> None:
+    def get_async_mutex(self, key: str) -> AsyncioMutex:
+        """Get an async mutex for dogpile prevention on the given key.
+        """
+        return AsyncioMutex(f'memory:{key}')
+
+    # ===== Lifecycle =====
+
+    def close(self) -> None:
         """Close the backend (no-op for memory backend).
+        """
+
+    async def aclose(self) -> None:
+        """Async close the backend (no-op for memory backend).
         """

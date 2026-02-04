@@ -7,20 +7,19 @@ license = "0BSD"
 authors = [{ name = "bissli" }]
 requires-python = ">=3.10"
 dependencies = [
-    "dogpile.cache",
-    "func-timeout",
+  "func-timeout",
 ]
 
 [project.optional-dependencies]
 async = ["aiosqlite"]
 redis = ["redis>=4.2.0"]
 test = [
-    "pytest",
-    "pytest-asyncio",
-    "pytest-mock",
-    "redis>=4.2.0",
-    "testcontainers[redis]",
-    "aiosqlite",
+  "pytest",
+  "pytest-asyncio",
+  "pytest-mock",
+  "redis>=4.2.0",
+  "testcontainers[redis]",
+  "aiosqlite",
 ]
 
 [project.urls]
