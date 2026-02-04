@@ -105,8 +105,83 @@ class TestSyncHelperMethods:
 
         assert hasattr(compute, 'invalidate')
         assert hasattr(compute, 'refresh')
+        assert hasattr(compute, 'get')
+        assert hasattr(compute, 'set')
+        assert hasattr(compute, 'original')
         assert callable(compute.invalidate)
         assert callable(compute.refresh)
+        assert callable(compute.get)
+        assert callable(compute.set)
+        assert callable(compute.original)
+
+    def test_get_returns_cached_value(self):
+        """Verify func.get() returns cached value.
+        """
+        @cachu.cache(ttl=60, backend='memory')
+        def compute(x: int) -> int:
+            return x * 2
+
+        compute(5)
+        result = compute.get(x=5)
+        assert result == 10
+
+    def test_get_raises_keyerror_when_not_cached(self):
+        """Verify func.get() raises KeyError when no cached value.
+        """
+        @cachu.cache(ttl=60, backend='memory')
+        def compute(x: int) -> int:
+            return x * 2
+
+        with pytest.raises(KeyError):
+            compute.get(x=999)
+
+    def test_get_returns_default_when_not_cached(self):
+        """Verify func.get() returns default when not cached.
+        """
+        @cachu.cache(ttl=60, backend='memory')
+        def compute(x: int) -> int:
+            return x * 2
+
+        result = compute.get(default='fallback', x=888)
+        assert result == 'fallback'
+
+    def test_set_stores_value(self):
+        """Verify func.set() stores value in cache.
+        """
+        call_count = 0
+
+        @cachu.cache(ttl=60, backend='memory')
+        def compute(x: int) -> int:
+            nonlocal call_count
+            call_count += 1
+            return x * 2
+
+        compute.set('preset_value', x=42)
+
+        result = compute(42)
+        assert result == 'preset_value'
+        assert call_count == 0
+
+    def test_original_calls_unwrapped_function(self):
+        """Verify func.original() calls the unwrapped function.
+        """
+        call_count = 0
+
+        @cachu.cache(ttl=60, backend='memory')
+        def compute(x: int) -> int:
+            nonlocal call_count
+            call_count += 1
+            return x * 2
+
+        compute(5)
+        assert call_count == 1
+
+        result = compute.original(5)
+        assert result == 10
+        assert call_count == 2
+
+        compute(5)
+        assert call_count == 2
 
 
 class TestAsyncHelperMethods:
@@ -210,6 +285,78 @@ class TestAsyncHelperMethods:
 
         assert hasattr(compute, 'invalidate')
         assert hasattr(compute, 'refresh')
+        assert hasattr(compute, 'get')
+        assert hasattr(compute, 'set')
+        assert hasattr(compute, 'original')
+
+    async def test_get_returns_cached_value(self):
+        """Verify async func.get() returns cached value.
+        """
+        @cachu.cache(ttl=60, backend='memory')
+        async def compute(x: int) -> int:
+            return x * 2
+
+        await compute(5)
+        result = await compute.get(x=5)
+        assert result == 10
+
+    async def test_get_raises_keyerror_when_not_cached(self):
+        """Verify async func.get() raises KeyError when no cached value.
+        """
+        @cachu.cache(ttl=60, backend='memory')
+        async def compute(x: int) -> int:
+            return x * 2
+
+        with pytest.raises(KeyError):
+            await compute.get(x=999)
+
+    async def test_get_returns_default_when_not_cached(self):
+        """Verify async func.get() returns default when not cached.
+        """
+        @cachu.cache(ttl=60, backend='memory')
+        async def compute(x: int) -> int:
+            return x * 2
+
+        result = await compute.get(default='fallback', x=888)
+        assert result == 'fallback'
+
+    async def test_set_stores_value(self):
+        """Verify async func.set() stores value in cache.
+        """
+        call_count = 0
+
+        @cachu.cache(ttl=60, backend='memory')
+        async def compute(x: int) -> int:
+            nonlocal call_count
+            call_count += 1
+            return x * 2
+
+        await compute.set('preset_value', x=42)
+
+        result = await compute(42)
+        assert result == 'preset_value'
+        assert call_count == 0
+
+    async def test_original_calls_unwrapped_function(self):
+        """Verify async func.original() calls the unwrapped function.
+        """
+        call_count = 0
+
+        @cachu.cache(ttl=60, backend='memory')
+        async def compute(x: int) -> int:
+            nonlocal call_count
+            call_count += 1
+            return x * 2
+
+        await compute(5)
+        assert call_count == 1
+
+        result = await compute.original(5)
+        assert result == 10
+        assert call_count == 2
+
+        await compute(5)
+        assert call_count == 2
 
 
 class TestHelperMethodsWithFileBackend:
