@@ -329,3 +329,175 @@ class TestDogpileWithRedisBackend:
         await asyncio.gather(*tasks)
 
         assert call_count == 1
+
+
+class TestConcurrentInvalidation:
+    """Tests for invalidation during concurrent computation.
+    """
+
+    def test_invalidate_during_computation_result_is_cached(self):
+        """Verify result is cached despite mid-computation invalidation.
+
+        Per dogpile.cache behavior: when Thread A is computing and Thread B
+        calls invalidate() mid-computation, the computed value has a newer
+        timestamp than the invalidation, so it gets cached normally.
+        """
+        call_count = 0
+        computation_started = threading.Event()
+        invalidation_done = threading.Event()
+
+        @cachu.cache(ttl=60, backend='memory')
+        def slow_compute(x: int) -> int:
+            nonlocal call_count
+            call_count += 1
+            computation_started.set()
+            invalidation_done.wait(timeout=1)
+            time.sleep(0.05)
+            return x * 2
+
+        def compute_worker():
+            slow_compute(5)
+
+        def invalidate_worker():
+            computation_started.wait(timeout=1)
+            slow_compute.invalidate(x=5)
+            invalidation_done.set()
+
+        t1 = threading.Thread(target=compute_worker)
+        t2 = threading.Thread(target=invalidate_worker)
+
+        t1.start()
+        t2.start()
+        t1.join()
+        t2.join()
+
+        result = slow_compute(5)
+        assert result == 10
+        assert call_count == 1, "Invalidation during computation should not prevent caching"
+
+    def test_invalidate_after_computation_causes_recompute(self):
+        """Verify invalidation after computation causes subsequent recompute.
+        """
+        call_count = 0
+
+        @cachu.cache(ttl=60, backend='memory')
+        def compute(x: int) -> int:
+            nonlocal call_count
+            call_count += 1
+            return x * 2
+
+        compute(5)
+        assert call_count == 1
+
+        compute.invalidate(x=5)
+
+        compute(5)
+        assert call_count == 2
+
+
+class TestConcurrentStatistics:
+    """Tests for cache statistics accuracy under concurrent access.
+    """
+
+    def test_stats_accurate_under_concurrent_hits(self):
+        """Verify hit/miss counts are accurate with concurrent access.
+
+        Multiple threads accessing the same cached value should result
+        in accurate hit/miss statistics (1 miss, N-1 hits).
+        """
+        @cachu.cache(ttl=60, backend='memory')
+        def compute(x: int) -> int:
+            time.sleep(0.05)
+            return x * 2
+
+        compute(5)
+
+        barrier = threading.Barrier(5)
+
+        def worker():
+            barrier.wait()
+            compute(5)
+
+        threads = [threading.Thread(target=worker) for _ in range(5)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        info = cachu.cache_info(compute)
+        assert info.misses == 1
+        assert info.hits == 5
+
+    def test_stats_accurate_with_mixed_keys(self):
+        """Verify statistics track hits/misses correctly for different keys.
+        """
+        @cachu.cache(ttl=60, backend='memory')
+        def compute(x: int) -> int:
+            return x * 2
+
+        compute(1)
+        compute(2)
+        compute(3)
+
+        compute(1)
+        compute(2)
+        compute(1)
+
+        info = cachu.cache_info(compute)
+        assert info.misses == 3
+        assert info.hits == 3
+
+
+class TestAsyncConcurrentInvalidation:
+    """Tests for async invalidation during concurrent computation.
+    """
+
+    async def test_invalidate_during_async_computation_result_is_cached(self):
+        """Verify async result is cached despite mid-computation invalidation.
+
+        Per dogpile.cache behavior: computed value has a newer timestamp
+        than the invalidation, so it gets cached normally.
+        """
+        call_count = 0
+        computation_started = asyncio.Event()
+        invalidation_done = asyncio.Event()
+
+        @cachu.cache(ttl=60, backend='memory')
+        async def slow_compute(x: int) -> int:
+            nonlocal call_count
+            call_count += 1
+            computation_started.set()
+            await asyncio.wait_for(invalidation_done.wait(), timeout=1)
+            await asyncio.sleep(0.05)
+            return x * 2
+
+        async def compute_task():
+            return await slow_compute(5)
+
+        async def invalidate_task():
+            await asyncio.wait_for(computation_started.wait(), timeout=1)
+            await slow_compute.invalidate(x=5)
+            invalidation_done.set()
+
+        await asyncio.gather(compute_task(), invalidate_task())
+
+        result = await slow_compute(5)
+        assert result == 10
+        assert call_count == 1, "Invalidation during computation should not prevent caching"
+
+    async def test_async_stats_accurate_under_concurrent_hits(self):
+        """Verify async hit/miss counts are accurate with concurrent access.
+        """
+        @cachu.cache(ttl=60, backend='memory')
+        async def compute(x: int) -> int:
+            await asyncio.sleep(0.05)
+            return x * 2
+
+        await compute(5)
+
+        tasks = [asyncio.create_task(compute(5)) for _ in range(5)]
+        await asyncio.gather(*tasks)
+
+        info = await cachu.async_cache_info(compute)
+        assert info.misses == 1
+        assert info.hits == 5

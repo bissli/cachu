@@ -19,14 +19,7 @@ class MemoryBackend(Backend):
     def __init__(self) -> None:
         self._cache: dict[str, tuple[bytes, float, float]] = {}
         self._sync_lock = threading.RLock()
-        self._async_lock: asyncio.Lock | None = None
-
-    def _get_async_lock(self) -> asyncio.Lock:
-        """Lazy-create async lock (must be called from async context).
-        """
-        if self._async_lock is None:
-            self._async_lock = asyncio.Lock()
-        return self._async_lock
+        self._async_lock = asyncio.Lock()
 
     # ===== Core logic (no locking) =====
 
@@ -152,38 +145,38 @@ class MemoryBackend(Backend):
     async def aget(self, key: str) -> Any:
         """Async get value by key. Returns NO_VALUE if not found or expired.
         """
-        async with self._get_async_lock():
+        async with self._async_lock:
             value, _ = self._do_get(key)
             return value
 
     async def aget_with_metadata(self, key: str) -> tuple[Any, float | None]:
         """Async get value and creation timestamp. Returns (NO_VALUE, None) if not found.
         """
-        async with self._get_async_lock():
+        async with self._async_lock:
             return self._do_get(key)
 
     async def aset(self, key: str, value: Any, ttl: int) -> None:
         """Async set value with TTL in seconds.
         """
-        async with self._get_async_lock():
+        async with self._async_lock:
             self._do_set(key, value, ttl)
 
     async def adelete(self, key: str) -> None:
         """Async delete value by key.
         """
-        async with self._get_async_lock():
+        async with self._async_lock:
             self._do_delete(key)
 
     async def aclear(self, pattern: str | None = None) -> int:
         """Async clear entries matching pattern. Returns count of cleared entries.
         """
-        async with self._get_async_lock():
+        async with self._async_lock:
             return self._do_clear(pattern)
 
     async def akeys(self, pattern: str | None = None) -> AsyncIterator[str]:
         """Async iterate over keys matching pattern.
         """
-        async with self._get_async_lock():
+        async with self._async_lock:
             all_keys = self._do_keys(pattern)
 
         for key in all_keys:
@@ -192,7 +185,7 @@ class MemoryBackend(Backend):
     async def acount(self, pattern: str | None = None) -> int:
         """Async count keys matching pattern.
         """
-        async with self._get_async_lock():
+        async with self._async_lock:
             return len(self._do_keys(pattern))
 
     def get_async_mutex(self, key: str) -> AsyncioMutex:

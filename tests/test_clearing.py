@@ -208,14 +208,8 @@ def test_cache_clear_redis_by_tag(redis_docker):
     assert product_call_count == 1
 
 
-def test_cache_clear_without_instantiated_backend():
-    """Verify cache_clear creates backend when none exists.
-
-    This tests that cache_clear() properly creates a backend instance when
-    both backend and ttl are specified, even if no cached function has been called.
-
-    This is essential for distributed caches (Redis) where cache_clear may be called
-    from a different process than the one that populated the cache.
+def test_cache_clear_with_tag_removes_tagged_entries():
+    """Verify cache_clear with tag parameter removes only matching entries.
     """
     call_count = 0
 
@@ -234,6 +228,29 @@ def test_cache_clear_without_instantiated_backend():
 
     func(1)
     assert call_count == 2
+
+
+def test_cache_clear_truly_uninstantiated_backend():
+    """Verify cache_clear handles backend that was never instantiated.
+
+    This tests that cache_clear() properly creates a backend instance when
+    both backend and ttl are specified, even if no cached function has been
+    called yet. Essential for distributed caches (Redis) where cache_clear
+    may be called from a different process than the one that populated cache.
+    """
+    cachu.cache_clear(backend='memory', ttl=77777)
+
+    call_count = 0
+
+    @cachu.cache(ttl=77777, backend='memory')
+    def func(x: int) -> int:
+        nonlocal call_count
+        call_count += 1
+        return x
+
+    func(1)
+    func(1)
+    assert call_count == 1
 
 
 def test_cache_clear_creates_backend_and_clears(temp_cache_dir):
@@ -303,3 +320,73 @@ async def test_async_cache_clear_resets_stats():
     info = await cachu.async_cache_info(func)
     assert info.hits == 0
     assert info.misses == 0
+
+
+def test_delete_then_access_causes_recomputation():
+    """Verify function re-executes after cache_delete removes entry.
+    """
+    call_count = 0
+
+    @cachu.cache(ttl=300, backend='memory')
+    def compute(x: int) -> int:
+        nonlocal call_count
+        call_count += 1
+        return x * 2
+
+    compute(5)
+    assert call_count == 1
+
+    compute(5)
+    assert call_count == 1
+
+    cachu.cache_delete(compute, x=5)
+
+    result = compute(5)
+    assert call_count == 2
+    assert result == 10
+
+
+def test_delete_nonexistent_key_is_idempotent():
+    """Verify cache_delete on non-existent key doesn't raise.
+    """
+    @cachu.cache(ttl=300, backend='memory')
+    def compute(x: int) -> int:
+        return x * 2
+
+    cachu.cache_delete(compute, x=999)
+
+
+def test_cache_clear_nonexistent_backend_is_idempotent():
+    """Verify cache_clear with uninstantiated backend is idempotent.
+
+    When cache_clear is called for a backend type that has no decorated
+    functions yet, it should complete without error. Calling it multiple
+    times should also work without error (idempotent operation).
+    """
+    cachu.cache_clear(backend='memory', ttl=9999)
+    cachu.cache_clear(backend='memory', ttl=9999)
+
+
+@pytest.mark.asyncio
+async def test_async_delete_then_access_causes_recomputation():
+    """Verify async function re-executes after async_cache_delete removes entry.
+    """
+    call_count = 0
+
+    @cachu.cache(ttl=300, backend='memory')
+    async def compute(x: int) -> int:
+        nonlocal call_count
+        call_count += 1
+        return x * 2
+
+    await compute(5)
+    assert call_count == 1
+
+    await compute(5)
+    assert call_count == 1
+
+    await cachu.async_cache_delete(compute, x=5)
+
+    result = await compute(5)
+    assert call_count == 2
+    assert result == 10

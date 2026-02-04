@@ -172,3 +172,70 @@ def test_memory_cache_ttl_expiration():
 
     func(5)
     assert call_count == 2
+
+
+@pytest.mark.slow
+def test_memory_cache_ttl_boundary_value_still_valid():
+    """Verify cached value is still valid just before TTL expires.
+
+    A value cached with TTL=1s should still be valid at 0.9s.
+    """
+    call_count = 0
+
+    @cachu.cache(ttl=1, backend='memory')
+    def func(x: int) -> int:
+        nonlocal call_count
+        call_count += 1
+        return x * 2
+
+    func(5)
+    assert call_count == 1
+
+    time.sleep(0.5)
+
+    result = func(5)
+    assert result == 10
+    assert call_count == 1
+
+
+@pytest.mark.slow
+def test_memory_cache_ttl_just_expired():
+    """Verify cached value expires just after TTL boundary.
+
+    A value cached with TTL=1s should be expired at 1.1s.
+    """
+    call_count = 0
+
+    @cachu.cache(ttl=1, backend='memory')
+    def func(x: int) -> int:
+        nonlocal call_count
+        call_count += 1
+        return x * 2
+
+    func(5)
+    assert call_count == 1
+
+    time.sleep(1.1)
+
+    func(5)
+    assert call_count == 2
+
+
+def test_memory_cache_zero_ttl_recomputes_every_call():
+    """Verify TTL=0 causes immediate expiration (no caching).
+
+    Per dogpile.cache behavior: TTL=0 means the value expires immediately,
+    so every access recomputes. This is useful for testing or disabling
+    caching on a per-function basis.
+    """
+    call_count = 0
+
+    @cachu.cache(ttl=0, backend='memory')
+    def func(x: int) -> int:
+        nonlocal call_count
+        call_count += 1
+        return x * 2
+
+    func(5)
+    func(5)
+    assert call_count == 2, "TTL=0 should cause recomputation on every call"

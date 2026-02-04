@@ -2,6 +2,7 @@
 """
 import pickle
 import struct
+import threading
 import time
 from collections.abc import AsyncIterator, Iterator
 from typing import TYPE_CHECKING, Any
@@ -84,6 +85,7 @@ class RedisBackend(Backend):
         self._lock_timeout = lock_timeout
         self._sync_client: redis.Redis | None = None
         self._async_client: aioredis.Redis | None = None
+        self._init_lock = threading.Lock()
 
     @property
     def client(self) -> 'redis.Redis':
@@ -96,10 +98,11 @@ class RedisBackend(Backend):
     def _get_async_client(self) -> 'aioredis.Redis':
         """Lazy-load async Redis client (from_url is NOT async).
         """
-        if self._async_client is None:
-            aioredis = _get_async_redis_module()
-            self._async_client = aioredis.from_url(self._url)
-        return self._async_client
+        with self._init_lock:
+            if self._async_client is None:
+                aioredis = _get_async_redis_module()
+                self._async_client = aioredis.from_url(self._url)
+            return self._async_client
 
     # ===== Sync interface =====
 
