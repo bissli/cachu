@@ -32,6 +32,9 @@ class MemoryBackend(Backend):
 
     def _do_get(self, key: str) -> tuple[Any, float | None]:
         """Get value and metadata without locking.
+
+        Handles corrupted cache data gracefully by treating deserialization
+        errors as cache misses (per dogpile.cache behavior).
         """
         entry = self._cache.get(key)
         if entry is None:
@@ -42,7 +45,11 @@ class MemoryBackend(Backend):
             del self._cache[key]
             return NO_VALUE, None
 
-        return pickle.loads(pickled_value), created_at
+        try:
+            return pickle.loads(pickled_value), created_at
+        except (pickle.UnpicklingError, EOFError, TypeError, AttributeError, ModuleNotFoundError):
+            del self._cache[key]
+            return NO_VALUE, None
 
     def _do_set(self, key: str, value: Any, ttl: int) -> None:
         """Set value without locking.
