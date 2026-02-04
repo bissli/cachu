@@ -27,15 +27,8 @@ class CacheManager:
         self.backends: dict[tuple[str | None, str, int], Backend] = {}
         self.stats: dict[int, tuple[int, int]] = {}
         self._sync_lock = threading.Lock()
-        self._async_lock: asyncio.Lock | None = None
+        self._async_lock = asyncio.Lock()
         self._stats_lock = threading.Lock()
-
-    def _get_async_lock(self) -> asyncio.Lock:
-        """Lazy-create async lock (must be called from async context).
-        """
-        if self._async_lock is None:
-            self._async_lock = asyncio.Lock()
-        return self._async_lock
 
     def _create_backend(
         self,
@@ -89,7 +82,7 @@ class CacheManager:
         """Get or create a backend instance (async).
         """
         key = (package, backend_type, ttl)
-        async with self._get_async_lock():
+        async with self._async_lock:
             if key not in self.backends:
                 self.backends[key] = self._create_backend(package, backend_type, ttl)
             return self.backends[key]
@@ -134,7 +127,7 @@ class CacheManager:
     async def aclear(self, package: str | None = None) -> None:
         """Clear backend instances (async).
         """
-        async with self._get_async_lock():
+        async with self._async_lock:
             if package is None:
                 for backend in self.backends.values():
                     await backend.aclose()

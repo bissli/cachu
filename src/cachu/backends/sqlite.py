@@ -35,25 +35,11 @@ class SqliteBackend(Backend):
     def __init__(self, filepath: str) -> None:
         self._filepath = filepath
         self._sync_lock = threading.RLock()
-        self._async_lock: asyncio.Lock | None = None
-        self._async_write_lock: asyncio.Lock | None = None
+        self._async_lock = asyncio.Lock()
+        self._async_write_lock = asyncio.Lock()
         self._async_connection: aiosqlite.Connection | None = None
         self._async_initialized = False
         self._init_sync_db()
-
-    def _get_async_lock(self) -> asyncio.Lock:
-        """Lazy-create async init lock (must be called from async context).
-        """
-        if self._async_lock is None:
-            self._async_lock = asyncio.Lock()
-        return self._async_lock
-
-    def _get_async_write_lock(self) -> asyncio.Lock:
-        """Lazy-create async write lock (must be called from async context).
-        """
-        if self._async_write_lock is None:
-            self._async_write_lock = asyncio.Lock()
-        return self._async_write_lock
 
     def _init_sync_db(self) -> None:
         """Initialize sync database schema.
@@ -80,7 +66,7 @@ class SqliteBackend(Backend):
     async def _ensure_async_initialized(self) -> 'aiosqlite.Connection':
         """Ensure async database is initialized and return connection.
         """
-        async with self._get_async_lock():
+        async with self._async_lock:
             if self._async_connection is None:
                 aiosqlite = _get_aiosqlite_module()
                 self._async_connection = await aiosqlite.connect(self._filepath)
@@ -120,7 +106,7 @@ class SqliteBackend(Backend):
         """
         async def _delete() -> None:
             try:
-                async with self._get_async_write_lock():
+                async with self._async_write_lock:
                     conn = await self._ensure_async_initialized()
                     await conn.execute('DELETE FROM cache WHERE key = ?', (key,))
                     await conn.commit()
@@ -373,7 +359,7 @@ class SqliteBackend(Backend):
         now = time.time()
         value_blob = pickle.dumps(value)
 
-        async with self._get_async_write_lock():
+        async with self._async_write_lock:
             conn = await self._ensure_async_initialized()
             await conn.execute(
                 """INSERT OR REPLACE INTO cache (key, value, created_at, expires_at)
@@ -385,7 +371,7 @@ class SqliteBackend(Backend):
     async def adelete(self, key: str) -> None:
         """Async delete value by key.
         """
-        async with self._get_async_write_lock():
+        async with self._async_write_lock:
             try:
                 conn = await self._ensure_async_initialized()
                 await conn.execute('DELETE FROM cache WHERE key = ?', (key,))
@@ -396,7 +382,7 @@ class SqliteBackend(Backend):
     async def aclear(self, pattern: str | None = None) -> int:
         """Async clear entries matching pattern. Returns count of cleared entries.
         """
-        async with self._get_async_write_lock():
+        async with self._async_write_lock:
             try:
                 conn = await self._ensure_async_initialized()
                 if pattern is None:
@@ -477,7 +463,7 @@ class SqliteBackend(Backend):
         """
         now = time.time()
 
-        async with self._get_async_write_lock():
+        async with self._async_write_lock:
             conn = await self._ensure_async_initialized()
             cursor = await conn.execute(
                 'SELECT COUNT(*) FROM cache WHERE expires_at <= ?',
