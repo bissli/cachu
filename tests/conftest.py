@@ -34,9 +34,6 @@ def _clear_all_backends() -> None:
                 pass
         manager.backends.clear()
 
-    with manager._stats_lock:
-        manager.stats.clear()
-
     ThreadingMutex.clear_locks()
     AsyncioMutex.clear_locks()
 
