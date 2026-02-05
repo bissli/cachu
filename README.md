@@ -1,4 +1,5 @@
 # cachu
+*pronunciation: ka-SHOO*
 
 Flexible caching library with support for memory, file, and Redis backends.
 
