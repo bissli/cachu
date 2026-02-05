@@ -190,7 +190,7 @@ class TestRedisMutex:
         """Provide a Redis client for testing.
         """
         import redis
-        from fixtures.redis import redis_test_config
+        from _fixtures.redis import redis_test_config
 
         client = redis.Redis(
             host=redis_test_config.host,
@@ -269,7 +269,7 @@ class TestAsyncRedisMutex:
         """Provide an async Redis client for testing.
         """
         import redis.asyncio as aioredis
-        from fixtures.redis import redis_test_config
+        from _fixtures.redis import redis_test_config
 
         client = aioredis.Redis(
             host=redis_test_config.host,

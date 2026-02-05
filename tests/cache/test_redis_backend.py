@@ -1,11 +1,11 @@
 """Test Redis cache backend operations via inheritance-based test suite.
 """
 import pytest
+from _fixtures.backend_suite import _GenericAsyncBackendTestSuite
+from _fixtures.backend_suite import _GenericAsyncDirectBackendTestSuite
+from _fixtures.backend_suite import _GenericBackendTestSuiteWithTTL
+from _fixtures.backend_suite import _GenericDirectBackendTestSuite
 from cachu.backends.redis import RedisBackend
-from fixtures.backend_suite import _GenericAsyncBackendTestSuite
-from fixtures.backend_suite import _GenericAsyncDirectBackendTestSuite
-from fixtures.backend_suite import _GenericBackendTestSuiteWithTTL
-from fixtures.backend_suite import _GenericDirectBackendTestSuite
 
 pytestmark = pytest.mark.redis
 
@@ -43,7 +43,7 @@ class TestRedisBackendDirect(_GenericDirectBackendTestSuite):
     def setup_redis(self, redis_docker):
         """Ensure Redis is available.
         """
-        from fixtures.redis import redis_test_config
+        from _fixtures.redis import redis_test_config
 
         self._redis_url = f'redis://{redis_test_config.host}:{redis_test_config.port}/0'
 
@@ -62,7 +62,7 @@ class TestAsyncRedisBackendDirect(_GenericAsyncDirectBackendTestSuite):
     def setup_redis(self, redis_docker):
         """Ensure Redis is available.
         """
-        from fixtures.redis import redis_test_config
+        from _fixtures.redis import redis_test_config
 
         self._redis_url = f'redis://{redis_test_config.host}:{redis_test_config.port}/0'
 

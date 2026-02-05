@@ -1,11 +1,11 @@
 """Test memory cache backend operations via inheritance-based test suite.
 """
 import pytest
+from _fixtures.backend_suite import _GenericAsyncBackendTestSuite
+from _fixtures.backend_suite import _GenericAsyncDirectBackendTestSuite
+from _fixtures.backend_suite import _GenericBackendTestSuiteWithTTL
+from _fixtures.backend_suite import _GenericDirectBackendTestSuite
 from cachu.backends.memory import MemoryBackend
-from fixtures.backend_suite import _GenericAsyncBackendTestSuite
-from fixtures.backend_suite import _GenericAsyncDirectBackendTestSuite
-from fixtures.backend_suite import _GenericBackendTestSuiteWithTTL
-from fixtures.backend_suite import _GenericDirectBackendTestSuite
 
 
 class TestMemoryBackend(_GenericBackendTestSuiteWithTTL):

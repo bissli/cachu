@@ -66,7 +66,7 @@ def reset_cache_config(request):
     redis_port = 6379
     if is_redis_test:
         request.getfixturevalue('redis_docker')
-        from fixtures.redis import redis_test_config
+        from _fixtures.redis import redis_test_config
         redis_host = redis_test_config.host
         redis_port = redis_test_config.port
 
@@ -113,5 +113,5 @@ def sample_function():
 
 
 pytest_plugins = [
-    'fixtures.redis',
+    '_fixtures.redis',
 ]
