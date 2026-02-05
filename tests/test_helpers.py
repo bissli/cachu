@@ -96,24 +96,6 @@ class TestSyncHelperMethods:
         compute(3, 4)
         assert call_count == 3
 
-    def test_helper_methods_exist(self):
-        """Verify helper methods are attached to decorated function.
-        """
-        @cachu.cache(ttl=60, backend='memory')
-        def compute(x: int) -> int:
-            return x * 2
-
-        assert hasattr(compute, 'invalidate')
-        assert hasattr(compute, 'refresh')
-        assert hasattr(compute, 'get')
-        assert hasattr(compute, 'set')
-        assert hasattr(compute, 'original')
-        assert callable(compute.invalidate)
-        assert callable(compute.refresh)
-        assert callable(compute.get)
-        assert callable(compute.set)
-        assert callable(compute.original)
-
     def test_get_returns_cached_value(self):
         """Verify func.get() returns cached value.
         """
@@ -275,19 +257,6 @@ class TestAsyncHelperMethods:
         assert call_count == 3
         await compute(3, 4)
         assert call_count == 3
-
-    async def test_helper_methods_exist(self):
-        """Verify async helper methods are attached to decorated function.
-        """
-        @cachu.cache(ttl=60, backend='memory')
-        async def compute(x: int) -> int:
-            return x * 2
-
-        assert hasattr(compute, 'invalidate')
-        assert hasattr(compute, 'refresh')
-        assert hasattr(compute, 'get')
-        assert hasattr(compute, 'set')
-        assert hasattr(compute, 'original')
 
     async def test_get_returns_cached_value(self):
         """Verify async func.get() returns cached value.

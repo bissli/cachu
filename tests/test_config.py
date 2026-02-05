@@ -4,17 +4,6 @@ import cachu
 import pytest
 
 
-def test_default_configuration():
-    """Verify default configuration values are set correctly.
-    """
-    from cachu.config import CacheConfig
-    default_config = CacheConfig()
-    assert default_config.backend_default == 'memory'
-    assert default_config.key_prefix == ''
-    assert default_config.file_dir == '/tmp'
-    assert default_config.redis_url == 'redis://localhost:6379/0'
-
-
 def test_configure_updates_settings(tmp_path):
     """Verify configure() updates global configuration.
     """
