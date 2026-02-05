@@ -3,8 +3,8 @@
 from collections.abc import AsyncIterator, Iterator
 from typing import Any, Literal
 
+from ..api import NO_VALUE, Backend
 from ..mutex import NullAsyncMutex, NullMutex
-from . import NO_VALUE, Backend
 
 
 class NullBackend(Backend):

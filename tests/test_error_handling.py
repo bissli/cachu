@@ -190,7 +190,7 @@ class TestCacheCorruption:
         """
         import time
 
-        from cachu.decorator import manager
+        from cachu.manager import manager
 
         call_count = 0
 
@@ -211,7 +211,7 @@ class TestCacheCorruption:
             backend._cache[key] = (b'invalid pickle data', now, now + 300)
 
         result = compute(5)
-        assert call_count == 2, "Corruption should trigger recomputation"
+        assert call_count == 2, 'Corruption should trigger recomputation'
         assert result == 10
 
     def test_corrupted_entry_does_not_affect_other_keys(self):
@@ -222,7 +222,7 @@ class TestCacheCorruption:
         """
         import time
 
-        from cachu.decorator import manager
+        from cachu.manager import manager
 
         @cachu.cache(ttl=300, backend='memory')
         def compute(x: int) -> int:

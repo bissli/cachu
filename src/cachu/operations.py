@@ -4,11 +4,11 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
-from .backends import NO_VALUE
+from .api import NO_VALUE, CacheInfo, CacheMeta
 from .config import _get_caller_package, get_config
-from .decorator import get_async_cache_info, get_cache_info, manager
-from .keys import _tag_to_pattern, mangle_key
-from .types import CacheInfo, CacheMeta
+from .decorator import get_async_cache_info, get_cache_info
+from .manager import manager
+from .util import _tag_to_pattern, mangle_key
 
 logger = logging.getLogger(__name__)
 

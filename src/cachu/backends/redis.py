@@ -7,8 +7,8 @@ import time
 from collections.abc import AsyncIterator, Iterator
 from typing import TYPE_CHECKING, Any, Literal
 
+from ..api import NO_VALUE, Backend
 from ..mutex import AsyncCacheMutex, AsyncRedisMutex, CacheMutex, RedisMutex
-from . import NO_VALUE, Backend
 
 if TYPE_CHECKING:
     import redis

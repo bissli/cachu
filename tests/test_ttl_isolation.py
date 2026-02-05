@@ -5,7 +5,7 @@ ensuring cache isolation and independent clearing behavior.
 """
 import cachu
 import pytest
-from cachu.decorator import get_async_backend, get_backend, manager
+from cachu.manager import aget_backend, get_backend, manager
 
 
 async def test_different_ttl_creates_separate_backends_memory(temp_cache_dir):
@@ -76,11 +76,11 @@ async def test_backend_with_different_ttl_is_isolated(temp_cache_dir):
     assert correct_ttl_count == 2
 
 
-async def test_get_async_backend_public_api_with_ttl(temp_cache_dir):
+async def test_aget_backend_public_api_with_ttl(temp_cache_dir):
     """Verify public aget_backend() respects TTL parameter.
     """
-    backend1 = await get_async_backend(backend_type='file', ttl=300)
-    backend2 = await get_async_backend(backend_type='file', ttl=86400)
+    backend1 = await aget_backend(backend_type='file', ttl=300)
+    backend2 = await aget_backend(backend_type='file', ttl=86400)
 
     assert backend1 is not backend2
 
@@ -96,7 +96,7 @@ async def test_async_get_backend_requires_ttl(temp_cache_dir):
     """Verify aget_backend() requires ttl parameter.
     """
     with pytest.raises(TypeError, match='ttl'):
-        await get_async_backend(backend_type='file')
+        await aget_backend(backend_type='file')
 
 
 async def test_decorator_and_get_backend_must_match_ttl(temp_cache_dir):
@@ -113,11 +113,11 @@ async def test_decorator_and_get_backend_must_match_ttl(temp_cache_dir):
     await cached_func(5)
     assert call_count == 1
 
-    backend_correct = await get_async_backend(backend_type='file', ttl=86400)
+    backend_correct = await aget_backend(backend_type='file', ttl=86400)
     correct_count = await backend_correct.acount()
     assert correct_count >= 1
 
-    backend_wrong = await get_async_backend(backend_type='file', ttl=300)
+    backend_wrong = await aget_backend(backend_type='file', ttl=300)
     wrong_count = await backend_wrong.acount()
     assert wrong_count == 0
 

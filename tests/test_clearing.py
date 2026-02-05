@@ -259,9 +259,9 @@ def test_cache_clear_creates_backend_and_clears(temp_cache_dir):
     File backend persists data to disk, allowing us to verify that cache_clear
     can find and delete cached data even when called from a 'fresh' process state.
     """
-    from cachu.backends import NO_VALUE
+    from cachu.api import NO_VALUE
     from cachu.config import _get_caller_package
-    from cachu.decorator import clear_backends, manager
+    from cachu.manager import clear_backends, manager
 
     package = _get_caller_package()
 
@@ -416,5 +416,7 @@ async def test_async_cache_clear_all_backends():
 
     info_a = await cachu.async_cache_info(func_a)
     info_b = await cachu.async_cache_info(func_b)
-    assert info_a.hits == 0 and info_a.misses == 0
-    assert info_b.hits == 0 and info_b.misses == 0
+    assert info_a.hits == 0
+    assert info_a.misses == 0
+    assert info_b.hits == 0
+    assert info_b.misses == 0

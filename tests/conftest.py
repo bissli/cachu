@@ -23,7 +23,7 @@ site.addsitedir(HERE)
 def _clear_all_backends() -> None:
     """Clear all backend instances (internal test helper).
     """
-    from cachu.decorator import manager
+    from cachu.manager import manager
     from cachu.mutex import AsyncioMutex, ThreadingMutex
 
     with manager._sync_lock:

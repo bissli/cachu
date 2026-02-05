@@ -8,8 +8,8 @@ import time
 from collections.abc import AsyncIterator, Iterator
 from typing import Any, Literal
 
+from ..api import NO_VALUE, Backend
 from ..mutex import AsyncioMutex, CacheMutex, ThreadingMutex
-from . import NO_VALUE, Backend
 
 
 class MemoryBackend(Backend):

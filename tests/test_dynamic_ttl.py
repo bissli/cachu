@@ -2,7 +2,7 @@
 """
 
 import cachu
-from cachu.decorator import manager
+from cachu.manager import manager
 
 
 class TestCallableTTL:
