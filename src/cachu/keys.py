@@ -120,6 +120,8 @@ def mangle_key(key: str, key_prefix: str, ttl: int) -> str:
 def _seconds_to_region_name(seconds: int) -> str:
     """Convert seconds to a human-readable region name.
     """
+    if seconds == -1:
+        return 'dynamic'
     if seconds < 60:
         return f'{seconds}s'
     elif seconds < 3600:

@@ -140,20 +140,16 @@ def cache_clear(
             total_cleared += cleared
             logger.debug(f'Cleared {cleared} entries from {backend} backend (ttl={ttl})')
     else:
-        with manager._sync_lock:
-            for (pkg, btype, bttl), backend_instance in list(manager.backends.items()):
-                if pkg != package:
-                    continue
-                if btype not in backends_to_clear:
-                    continue
-                if ttl is not None and bttl != ttl:
-                    continue
-
-                cleared = backend_instance.clear(pattern)
-                backend_instance.clear_stats()
-                if cleared > 0:
-                    total_cleared += cleared
-                    logger.debug(f'Cleared {cleared} entries from {btype} backend (ttl={bttl})')
+        for (pkg, btype, bttl), backend_instance in manager.iter_backends(
+            package,
+            backend_types=backends_to_clear,
+            ttl=ttl,
+        ):
+            cleared = backend_instance.clear(pattern)
+            backend_instance.clear_stats()
+            if cleared > 0:
+                total_cleared += cleared
+                logger.debug(f'Cleared {cleared} entries from {btype} backend (ttl={bttl})')
 
     return total_cleared
 
@@ -294,20 +290,16 @@ async def async_cache_clear(
             total_cleared += cleared
             logger.debug(f'Cleared {cleared} entries from {backend} backend (ttl={ttl})')
     else:
-        async with manager._async_lock:
-            for (pkg, btype, bttl), backend_instance in list(manager.backends.items()):
-                if pkg != package:
-                    continue
-                if btype not in backends_to_clear:
-                    continue
-                if ttl is not None and bttl != ttl:
-                    continue
-
-                cleared = await backend_instance.aclear(pattern)
-                await backend_instance.aclear_stats()
-                if cleared > 0:
-                    total_cleared += cleared
-                    logger.debug(f'Cleared {cleared} entries from {btype} backend (ttl={bttl})')
+        async for (pkg, btype, bttl), backend_instance in manager.aiter_backends(
+            package,
+            backend_types=backends_to_clear,
+            ttl=ttl,
+        ):
+            cleared = await backend_instance.aclear(pattern)
+            await backend_instance.aclear_stats()
+            if cleared > 0:
+                total_cleared += cleared
+                logger.debug(f'Cleared {cleared} entries from {btype} backend (ttl={bttl})')
 
     return total_cleared
 

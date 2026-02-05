@@ -1,12 +1,15 @@
 """SQLite-based cache backend.
 """
 import asyncio
+import logging
 import pickle
 import sqlite3
 import threading
 import time
 from collections.abc import AsyncIterator, Iterator
 from typing import TYPE_CHECKING, Any, Literal
+
+logger = logging.getLogger(__name__)
 
 from ..mutex import AsyncCacheMutex, AsyncioMutex, CacheMutex, ThreadingMutex
 from . import NO_VALUE, Backend
@@ -39,12 +42,16 @@ class SqliteBackend(Backend):
         self._async_write_lock = asyncio.Lock()
         self._async_connection: aiosqlite.Connection | None = None
         self._async_initialized = False
-        self._init_sync_db()
+        self._sync_initialized = False
 
-    def _init_sync_db(self) -> None:
-        """Initialize sync database schema.
+    def _ensure_sync_initialized(self) -> None:
+        """Ensure sync database schema is initialized (lazy, once).
         """
+        if self._sync_initialized:
+            return
         with self._sync_lock:
+            if self._sync_initialized:
+                return
             conn = sqlite3.connect(self._filepath)
             try:
                 conn.execute("""
@@ -69,6 +76,7 @@ class SqliteBackend(Backend):
                 conn.commit()
             finally:
                 conn.close()
+            self._sync_initialized = True
 
     async def _ensure_async_initialized(self) -> 'aiosqlite.Connection':
         """Ensure async database is initialized and return connection.
@@ -108,6 +116,7 @@ class SqliteBackend(Backend):
     def _get_sync_connection(self) -> sqlite3.Connection:
         """Get a sync database connection.
         """
+        self._ensure_sync_initialized()
         return sqlite3.connect(self._filepath)
 
     def _fnmatch_to_glob(self, pattern: str) -> str:
@@ -591,33 +600,22 @@ class SqliteBackend(Backend):
 
     # ===== Lifecycle =====
 
-    def _close_async_connection_sync(self) -> None:
-        """Forcefully close async connection from sync context.
-
-        This accesses aiosqlite internals as there's no public sync close API.
-        """
-        if self._async_connection is None:
-            return
-
-        conn = self._async_connection
-        self._async_connection = None
-        self._async_initialized = False
-
-        try:
-            conn._running = False
-            if hasattr(conn, '_connection') and conn._connection:
-                conn._connection.close()
-        except Exception:
-            pass
-
     def close(self) -> None:
-        """Close all backend resources from sync context.
+        """Close sync resources. Use aclose() from async context for full cleanup.
         """
-        self._close_async_connection_sync()
+        self._sync_initialized = False
+        if self._async_connection is not None:
+            logger.warning(
+                'SqliteBackend.close() called with active async connection. '
+                'Use aclose() from async context for clean shutdown.'
+            )
+            self._async_connection = None
+            self._async_initialized = False
 
     async def aclose(self) -> None:
         """Close all backend resources from async context.
         """
+        self._sync_initialized = False
         if self._async_connection is not None:
             conn = self._async_connection
             self._async_connection = None

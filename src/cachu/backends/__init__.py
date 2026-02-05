@@ -2,7 +2,7 @@
 """
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Iterator
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
     from ..mutex import AsyncCacheMutex, CacheMutex
@@ -10,11 +10,9 @@ if TYPE_CHECKING:
 NO_VALUE = object()
 
 
-class Backend(ABC):
-    """Abstract base class for cache backends with both sync and async interfaces.
+class SyncBackend(ABC):
+    """Sync-only cache backend interface.
     """
-
-    # ===== Sync interface =====
 
     @abstractmethod
     def get(self, key: str) -> Any:
@@ -56,24 +54,14 @@ class Backend(ABC):
         """Get a mutex for dogpile prevention on the given key.
         """
 
-    # ===== Stats interface (sync) =====
-
-    @abstractmethod
-    def incr_stat(self, fn_name: str, stat: Literal['hits', 'misses']) -> None:
-        """Increment a stat counter for a function.
+    def close(self) -> None:
+        """Close the backend and release resources.
         """
 
-    @abstractmethod
-    def get_stats(self, fn_name: str) -> tuple[int, int]:
-        """Get (hits, misses) for a function.
-        """
 
-    @abstractmethod
-    def clear_stats(self, fn_name: str | None = None) -> None:
-        """Clear stats for a function, or all stats if fn_name is None.
-        """
-
-    # ===== Async interface =====
+class AsyncBackend(ABC):
+    """Async-only cache backend interface.
+    """
 
     @abstractmethod
     async def aget(self, key: str) -> Any:
@@ -115,7 +103,74 @@ class Backend(ABC):
         """Get an async mutex for dogpile prevention on the given key.
         """
 
-    # ===== Stats interface (async) =====
+    async def aclose(self) -> None:
+        """Async close the backend and release resources.
+        """
+
+
+@runtime_checkable
+class SupportsStats(Protocol):
+    """Protocol for backends that track cache statistics (sync).
+    """
+
+    def incr_stat(self, fn_name: str, stat: Literal['hits', 'misses']) -> None:
+        """Increment a stat counter for a function.
+        """
+        ...
+
+    def get_stats(self, fn_name: str) -> tuple[int, int]:
+        """Get (hits, misses) for a function.
+        """
+        ...
+
+    def clear_stats(self, fn_name: str | None = None) -> None:
+        """Clear stats for a function, or all stats if fn_name is None.
+        """
+        ...
+
+
+@runtime_checkable
+class SupportsAsyncStats(Protocol):
+    """Protocol for backends that track cache statistics (async).
+    """
+
+    async def aincr_stat(self, fn_name: str, stat: Literal['hits', 'misses']) -> None:
+        """Async increment a stat counter for a function.
+        """
+        ...
+
+    async def aget_stats(self, fn_name: str) -> tuple[int, int]:
+        """Async get (hits, misses) for a function.
+        """
+        ...
+
+    async def aclear_stats(self, fn_name: str | None = None) -> None:
+        """Async clear stats for a function, or all stats if fn_name is None.
+        """
+        ...
+
+
+class Backend(SyncBackend, AsyncBackend):
+    """Full backend supporting both sync and async operations.
+
+    Concrete backends should also implement SupportsStats and SupportsAsyncStats
+    for statistics tracking (duck typed via Protocol).
+    """
+
+    @abstractmethod
+    def incr_stat(self, fn_name: str, stat: Literal['hits', 'misses']) -> None:
+        """Increment a stat counter for a function.
+        """
+
+    @abstractmethod
+    def get_stats(self, fn_name: str) -> tuple[int, int]:
+        """Get (hits, misses) for a function.
+        """
+
+    @abstractmethod
+    def clear_stats(self, fn_name: str | None = None) -> None:
+        """Clear stats for a function, or all stats if fn_name is None.
+        """
 
     @abstractmethod
     async def aincr_stat(self, fn_name: str, stat: Literal['hits', 'misses']) -> None:
@@ -132,15 +187,12 @@ class Backend(ABC):
         """Async clear stats for a function, or all stats if fn_name is None.
         """
 
-    # ===== Lifecycle =====
 
-    def close(self) -> None:
-        """Close the backend and release resources.
-        """
-
-    async def aclose(self) -> None:
-        """Async close the backend and release resources.
-        """
-
-
-__all__ = ['Backend', 'NO_VALUE']
+__all__ = [
+    'AsyncBackend',
+    'Backend',
+    'NO_VALUE',
+    'SupportsAsyncStats',
+    'SupportsStats',
+    'SyncBackend',
+]

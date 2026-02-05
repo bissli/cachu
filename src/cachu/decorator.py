@@ -5,7 +5,7 @@ import logging
 import os
 import threading
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Callable, Iterator
 from functools import wraps
 from typing import Any
 
@@ -117,6 +117,44 @@ class CacheManager:
                 for key in keys_to_delete:
                     await self.backends[key].aclose()
                     del self.backends[key]
+
+    def iter_backends(
+        self,
+        package: str | None,
+        backend_types: list[str] | None = None,
+        ttl: int | None = None,
+    ) -> Iterator[tuple[tuple[str | None, str, int], Backend]]:
+        """Iterate over backend instances matching criteria.
+        """
+        with self._sync_lock:
+            for key, backend in list(self.backends.items()):
+                pkg, btype, bttl = key
+                if pkg != package:
+                    continue
+                if backend_types and btype not in backend_types:
+                    continue
+                if ttl is not None and bttl != ttl:
+                    continue
+                yield key, backend
+
+    async def aiter_backends(
+        self,
+        package: str | None,
+        backend_types: list[str] | None = None,
+        ttl: int | None = None,
+    ) -> AsyncIterator[tuple[tuple[str | None, str, int], Backend]]:
+        """Async iterate over backend instances matching criteria.
+        """
+        async with self._async_lock:
+            for key, backend in list(self.backends.items()):
+                pkg, btype, bttl = key
+                if pkg != package:
+                    continue
+                if backend_types and btype not in backend_types:
+                    continue
+                if ttl is not None and bttl != ttl:
+                    continue
+                yield key, backend
 
 
 manager = CacheManager()
@@ -459,28 +497,6 @@ def cache(
             return sync_wrapper
 
     return decorator
-
-
-def async_cache(
-    ttl: int | Callable[[Any], int] = 300,
-    backend: str | None = None,
-    tag: str = '',
-    exclude: set[str] | None = None,
-    cache_if: Callable[[Any], bool] | None = None,
-    validate: Callable[[CacheEntry], bool] | None = None,
-    package: str | None = None,
-) -> Callable[[Callable[..., Awaitable[Any]]], Callable[..., Awaitable[Any]]]:
-    """Deprecated: Use @cache instead (auto-detects async).
-    """
-    return cache(
-        ttl=ttl,
-        backend=backend,
-        tag=tag,
-        exclude=exclude,
-        cache_if=cache_if,
-        validate=validate,
-        package=package,
-    )
 
 
 def get_cache_info(fn: Callable[..., Any]) -> CacheInfo:

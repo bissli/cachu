@@ -92,7 +92,7 @@ class NullBackend(Backend):
         """Yields nothing.
         """
         return
-        yield
+        yield  # type: ignore[misc]
 
     async def acount(self, pattern: str | None = None) -> int:
         """Always returns 0.
