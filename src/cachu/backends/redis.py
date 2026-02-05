@@ -1,5 +1,6 @@
 """Redis cache backend implementation.
 """
+import asyncio
 import pickle
 import struct
 import threading
@@ -306,15 +307,21 @@ class RedisBackend(Backend):
             client.close()
 
     def _close_async_client_sync(self) -> None:
-        """Forcefully close async client from sync context.
+        """Close async client from sync context via thread.
         """
         if self._async_client is not None:
             client = self._async_client
             self._async_client = None
-            try:
-                client.close()
-            except Exception:
-                pass
+
+            async def _close() -> None:
+                try:
+                    await client.aclose()
+                except RuntimeError:
+                    pass
+
+            t = threading.Thread(target=lambda: asyncio.run(_close()))
+            t.start()
+            t.join(timeout=5.0)
 
     def close(self) -> None:
         """Close all backend resources from sync context.

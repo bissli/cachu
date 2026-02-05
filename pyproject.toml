@@ -38,6 +38,10 @@ markers = [
   "redis: marks tests requiring Redis (deselect with '-m \"not redis\"')",
   "slow: marks tests as slow (deselect with '-m \"not slow\"')",
 ]
+filterwarnings = [
+  "ignore:The @wait_container_is_ready decorator is deprecated:DeprecationWarning",
+  "ignore::pytest.PytestUnhandledThreadExceptionWarning",
+]
 
 [build-system]
 requires = ["setuptools>=61.0"]
