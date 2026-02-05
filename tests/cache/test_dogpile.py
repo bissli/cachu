@@ -373,7 +373,7 @@ class TestConcurrentInvalidation:
 
         result = slow_compute(5)
         assert result == 10
-        assert call_count == 1, "Invalidation during computation should not prevent caching"
+        assert call_count == 1, 'Invalidation during computation should not prevent caching'
 
     def test_invalidate_after_computation_causes_recompute(self):
         """Verify invalidation after computation causes subsequent recompute.
@@ -483,7 +483,7 @@ class TestAsyncConcurrentInvalidation:
 
         result = await slow_compute(5)
         assert result == 10
-        assert call_count == 1, "Invalidation during computation should not prevent caching"
+        assert call_count == 1, 'Invalidation during computation should not prevent caching'
 
     async def test_async_stats_accurate_under_concurrent_hits(self):
         """Verify async hit/miss counts are accurate with concurrent access.
