@@ -601,16 +601,23 @@ class SqliteBackend(Backend):
     # ===== Lifecycle =====
 
     def close(self) -> None:
-        """Close sync resources. Use aclose() from async context for full cleanup.
+        """Close all resources including async connection via thread.
         """
         self._sync_initialized = False
         if self._async_connection is not None:
-            logger.warning(
-                'SqliteBackend.close() called with active async connection. '
-                'Use aclose() from async context for clean shutdown.'
-            )
+            conn = self._async_connection
             self._async_connection = None
             self._async_initialized = False
+
+            async def _close() -> None:
+                try:
+                    await conn.close()
+                except RuntimeError:
+                    pass
+
+            t = threading.Thread(target=lambda: asyncio.run(_close()))
+            t.start()
+            t.join(timeout=5.0)
 
     async def aclose(self) -> None:
         """Close all backend resources from async context.
