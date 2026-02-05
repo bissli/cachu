@@ -9,7 +9,7 @@ from typing import Any
 
 import cachu
 import pytest
-from cachu.backends import NO_VALUE
+from cachu.api import NO_VALUE
 
 
 class _GenericBackendTestSuite(ABC):

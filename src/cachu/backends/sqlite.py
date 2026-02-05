@@ -9,10 +9,10 @@ import time
 from collections.abc import AsyncIterator, Iterator
 from typing import TYPE_CHECKING, Any, Literal
 
-logger = logging.getLogger(__name__)
-
+from ..api import NO_VALUE, Backend
 from ..mutex import AsyncCacheMutex, AsyncioMutex, CacheMutex, ThreadingMutex
-from . import NO_VALUE, Backend
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     import aiosqlite

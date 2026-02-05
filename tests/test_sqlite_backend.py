@@ -4,7 +4,7 @@ import tempfile
 import time
 
 import pytest
-from cachu.backends import NO_VALUE
+from cachu.api import NO_VALUE
 from cachu.backends.sqlite import SqliteBackend
 from fixtures.backend_suite import _GenericAsyncDirectBackendTestSuite
 from fixtures.backend_suite import _GenericDirectBackendTestSuite

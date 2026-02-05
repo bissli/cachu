@@ -2,311 +2,18 @@
 """
 import asyncio
 import logging
-import os
-import threading
-import time
-from collections.abc import AsyncIterator, Callable, Iterator
+from collections.abc import Callable
 from functools import wraps
 from typing import Any
 
-from .backends import NO_VALUE, Backend
-from .backends.memory import MemoryBackend
-from .backends.sqlite import SqliteBackend
+from .api import NO_VALUE, CacheEntry, CacheInfo, CacheMeta
 from .config import _get_caller_package, get_config, is_disabled
-from .keys import make_key_generator, mangle_key
-from .types import CacheEntry, CacheInfo, CacheMeta
+from .manager import manager
+from .util import make_key_generator, mangle_key, validate_entry
 
 logger = logging.getLogger(__name__)
 
 _MISSING = object()
-
-
-class CacheManager:
-    """Unified manager for cache backends and statistics.
-    """
-
-    def __init__(self) -> None:
-        self.backends: dict[tuple[str | None, str, int], Backend] = {}
-        self._sync_lock = threading.Lock()
-        self._async_lock = asyncio.Lock()
-
-    def _create_backend(
-        self,
-        package: str | None,
-        backend_type: str,
-        ttl: int,
-    ) -> Backend:
-        """Create a backend instance (called with lock held).
-        """
-        cfg = get_config(package)
-
-        if backend_type == 'memory':
-            backend: Backend = MemoryBackend()
-        elif backend_type == 'file':
-            if ttl < 60:
-                filename = f'cache{ttl}sec.db'
-            elif ttl < 3600:
-                filename = f'cache{ttl // 60}min.db'
-            else:
-                filename = f'cache{ttl // 3600}hour.db'
-
-            if package:
-                filename = f'{package}_{filename}'
-
-            filepath = os.path.join(cfg.file_dir, filename)
-            backend = SqliteBackend(filepath)
-        elif backend_type == 'redis':
-            from .backends.redis import RedisBackend
-            backend = RedisBackend(cfg.redis_url, cfg.lock_timeout)
-        elif backend_type == 'null':
-            from .backends.null import NullBackend
-            backend = NullBackend()
-        else:
-            raise ValueError(f'Unknown backend type: {backend_type}')
-
-        logger.debug(f"Created {backend_type} backend for package '{package}', {ttl}s TTL")
-        return backend
-
-    def get_backend(self, package: str | None, backend_type: str, ttl: int) -> Backend:
-        """Get or create a backend instance (sync).
-        """
-        key = (package, backend_type, ttl)
-        with self._sync_lock:
-            if key not in self.backends:
-                self.backends[key] = self._create_backend(package, backend_type, ttl)
-            return self.backends[key]
-
-    async def aget_backend(
-        self,
-        package: str | None,
-        backend_type: str,
-        ttl: int,
-    ) -> Backend:
-        """Get or create a backend instance (async).
-        """
-        key = (package, backend_type, ttl)
-        async with self._async_lock:
-            if key not in self.backends:
-                self.backends[key] = self._create_backend(package, backend_type, ttl)
-            return self.backends[key]
-
-    def clear(self, package: str | None = None) -> None:
-        """Clear backend instances (sync).
-        """
-        with self._sync_lock:
-            if package is None:
-                for backend in self.backends.values():
-                    backend.close()
-                self.backends.clear()
-            else:
-                keys_to_delete = [k for k in self.backends if k[0] == package]
-                for key in keys_to_delete:
-                    self.backends[key].close()
-                    del self.backends[key]
-
-    async def aclear(self, package: str | None = None) -> None:
-        """Clear backend instances (async).
-        """
-        async with self._async_lock:
-            if package is None:
-                for backend in self.backends.values():
-                    await backend.aclose()
-                self.backends.clear()
-            else:
-                keys_to_delete = [k for k in self.backends if k[0] == package]
-                for key in keys_to_delete:
-                    await self.backends[key].aclose()
-                    del self.backends[key]
-
-    def iter_backends(
-        self,
-        package: str | None,
-        backend_types: list[str] | None = None,
-        ttl: int | None = None,
-    ) -> Iterator[tuple[tuple[str | None, str, int], Backend]]:
-        """Iterate over backend instances matching criteria.
-        """
-        with self._sync_lock:
-            for key, backend in list(self.backends.items()):
-                pkg, btype, bttl = key
-                if pkg != package:
-                    continue
-                if backend_types and btype not in backend_types:
-                    continue
-                if ttl is not None and bttl != ttl:
-                    continue
-                yield key, backend
-
-    async def aiter_backends(
-        self,
-        package: str | None,
-        backend_types: list[str] | None = None,
-        ttl: int | None = None,
-    ) -> AsyncIterator[tuple[tuple[str | None, str, int], Backend]]:
-        """Async iterate over backend instances matching criteria.
-        """
-        async with self._async_lock:
-            for key, backend in list(self.backends.items()):
-                pkg, btype, bttl = key
-                if pkg != package:
-                    continue
-                if backend_types and btype not in backend_types:
-                    continue
-                if ttl is not None and bttl != ttl:
-                    continue
-                yield key, backend
-
-
-manager = CacheManager()
-
-
-def get_backend(
-    backend_type: str | None = None,
-    package: str | None = None,
-    *,
-    ttl: int,
-) -> Backend:
-    """Get a backend instance.
-
-    Args:
-        backend_type: 'memory', 'file', or 'redis'. Uses config default if None.
-        package: Package name. Auto-detected if None.
-        ttl: TTL in seconds (used for backend separation).
-    """
-    if package is None:
-        package = _get_caller_package()
-
-    if backend_type is None:
-        cfg = get_config(package)
-        backend_type = cfg.backend_default
-
-    return manager.get_backend(package, backend_type, ttl)
-
-
-async def aget_backend(
-    backend_type: str | None = None,
-    package: str | None = None,
-    *,
-    ttl: int,
-) -> Backend:
-    """Get a backend instance (async).
-
-    Args:
-        backend_type: 'memory', 'file', or 'redis'. Uses config default if None.
-        package: Package name. Auto-detected if None.
-        ttl: TTL in seconds (used for backend separation).
-    """
-    if package is None:
-        package = _get_caller_package()
-
-    if backend_type is None:
-        cfg = get_config(package)
-        backend_type = cfg.backend_default
-
-    return await manager.aget_backend(package, backend_type, ttl)
-
-
-def _validate_entry(
-    value: Any,
-    created_at: float | None,
-    validate: Callable[[CacheEntry], bool] | None,
-) -> bool:
-    """Validate a cached entry using the validate callback.
-    """
-    if validate is None or created_at is None:
-        return True
-
-    entry = CacheEntry(
-        value=value,
-        created_at=created_at,
-        age=time.time() - created_at,
-    )
-    return validate(entry)
-
-
-def _attach_helpers(
-    wrapper: Callable[..., Any],
-    key_generator: Callable[..., str],
-    resolved_package: str | None,
-    resolved_backend: str,
-    ttl: int,
-    is_async: bool,
-    original_fn: Callable[..., Any],
-) -> None:
-    """Attach helper methods to wrapper (.invalidate, .refresh, .get, .set, .original).
-    """
-    if is_async:
-        async def invalidate(**kwargs: Any) -> None:
-            backend = await manager.aget_backend(resolved_package, resolved_backend, ttl)
-            cfg = get_config(resolved_package)
-            cache_key = mangle_key(key_generator(**kwargs), cfg.key_prefix, ttl)
-            await backend.adelete(cache_key)
-
-        async def refresh(**kwargs: Any) -> Any:
-            await invalidate(**kwargs)
-            return await wrapper(**kwargs)
-
-        async def get(default: Any = _MISSING, **kwargs: Any) -> Any:
-            backend = await manager.aget_backend(resolved_package, resolved_backend, ttl)
-            cfg = get_config(resolved_package)
-            cache_key = mangle_key(key_generator(**kwargs), cfg.key_prefix, ttl)
-            value = await backend.aget(cache_key)
-            if value is NO_VALUE:
-                if default is _MISSING:
-                    raise KeyError(f'No cached value for key {cache_key}')
-                return default
-            return value
-
-        async def set(value: Any, **kwargs: Any) -> None:
-            backend = await manager.aget_backend(resolved_package, resolved_backend, ttl)
-            cfg = get_config(resolved_package)
-            cache_key = mangle_key(key_generator(**kwargs), cfg.key_prefix, ttl)
-            await backend.aset(cache_key, value, ttl)
-
-        async def original(*args: Any, **kwargs: Any) -> Any:
-            return await original_fn(*args, **kwargs)
-
-        wrapper.invalidate = invalidate
-        wrapper.refresh = refresh
-        wrapper.get = get
-        wrapper.set = set
-        wrapper.original = original
-    else:
-        def invalidate(**kwargs: Any) -> None:
-            backend = manager.get_backend(resolved_package, resolved_backend, ttl)
-            cfg = get_config(resolved_package)
-            cache_key = mangle_key(key_generator(**kwargs), cfg.key_prefix, ttl)
-            backend.delete(cache_key)
-
-        def refresh(**kwargs: Any) -> Any:
-            invalidate(**kwargs)
-            return wrapper(**kwargs)
-
-        def get(default: Any = _MISSING, **kwargs: Any) -> Any:
-            backend = manager.get_backend(resolved_package, resolved_backend, ttl)
-            cfg = get_config(resolved_package)
-            cache_key = mangle_key(key_generator(**kwargs), cfg.key_prefix, ttl)
-            value = backend.get(cache_key)
-            if value is NO_VALUE:
-                if default is _MISSING:
-                    raise KeyError(f'No cached value for key {cache_key}')
-                return default
-            return value
-
-        def set(value: Any, **kwargs: Any) -> None:
-            backend = manager.get_backend(resolved_package, resolved_backend, ttl)
-            cfg = get_config(resolved_package)
-            cache_key = mangle_key(key_generator(**kwargs), cfg.key_prefix, ttl)
-            backend.set(cache_key, value, ttl)
-
-        def original(*args: Any, **kwargs: Any) -> Any:
-            return original_fn(*args, **kwargs)
-
-        wrapper.invalidate = invalidate
-        wrapper.refresh = refresh
-        wrapper.get = get
-        wrapper.set = set
-        wrapper.original = original
 
 
 def cache(
@@ -416,7 +123,7 @@ def cache(
                 if not overwrite_cache:
                     value, created_at = await backend_inst.aget_with_metadata(cache_key)
 
-                    if value is not NO_VALUE and _validate_entry(value, created_at, validate):
+                    if value is not NO_VALUE and validate_entry(value, created_at, validate):
                         await backend_inst.aincr_stat(fn.__name__, 'hits')
                         return value
 
@@ -425,7 +132,7 @@ def cache(
                 try:
                     if not overwrite_cache:
                         value, created_at = await backend_inst.aget_with_metadata(cache_key)
-                        if value is not NO_VALUE and _validate_entry(value, created_at, validate):
+                        if value is not NO_VALUE and validate_entry(value, created_at, validate):
                             await backend_inst.aincr_stat(fn.__name__, 'hits')
                             return value
 
@@ -465,7 +172,7 @@ def cache(
                 if not overwrite_cache:
                     value, created_at = backend_inst.get_with_metadata(cache_key)
 
-                    if value is not NO_VALUE and _validate_entry(value, created_at, validate):
+                    if value is not NO_VALUE and validate_entry(value, created_at, validate):
                         backend_inst.incr_stat(fn.__name__, 'hits')
                         return value
 
@@ -474,7 +181,7 @@ def cache(
                 try:
                     if not overwrite_cache:
                         value, created_at = backend_inst.get_with_metadata(cache_key)
-                        if value is not NO_VALUE and _validate_entry(value, created_at, validate):
+                        if value is not NO_VALUE and validate_entry(value, created_at, validate):
                             backend_inst.incr_stat(fn.__name__, 'hits')
                             return value
 
@@ -547,16 +254,86 @@ async def get_async_cache_info(fn: Callable[..., Any]) -> CacheInfo:
     return CacheInfo(hits=hits, misses=misses, currsize=currsize)
 
 
-def clear_backends(package: str | None = None) -> None:
-    """Clear all backend instances for a package. Primarily for testing.
+def _attach_helpers(
+    wrapper: Callable[..., Any],
+    key_generator: Callable[..., str],
+    resolved_package: str | None,
+    resolved_backend: str,
+    ttl: int,
+    is_async: bool,
+    original_fn: Callable[..., Any],
+) -> None:
+    """Attach helper methods to wrapper (.invalidate, .refresh, .get, .set, .original).
     """
-    manager.clear(package)
+    if is_async:
+        async def invalidate(**kwargs: Any) -> None:
+            backend = await manager.aget_backend(resolved_package, resolved_backend, ttl)
+            cfg = get_config(resolved_package)
+            cache_key = mangle_key(key_generator(**kwargs), cfg.key_prefix, ttl)
+            await backend.adelete(cache_key)
 
+        async def refresh(**kwargs: Any) -> Any:
+            await invalidate(**kwargs)
+            return await wrapper(**kwargs)
 
-async def clear_async_backends(package: str | None = None) -> None:
-    """Clear all async backend instances for a package. Primarily for testing.
-    """
-    await manager.aclear(package)
+        async def get(default: Any = _MISSING, **kwargs: Any) -> Any:
+            backend = await manager.aget_backend(resolved_package, resolved_backend, ttl)
+            cfg = get_config(resolved_package)
+            cache_key = mangle_key(key_generator(**kwargs), cfg.key_prefix, ttl)
+            value = await backend.aget(cache_key)
+            if value is NO_VALUE:
+                if default is _MISSING:
+                    raise KeyError(f'No cached value for key {cache_key}')
+                return default
+            return value
 
+        async def set(value: Any, **kwargs: Any) -> None:
+            backend = await manager.aget_backend(resolved_package, resolved_backend, ttl)
+            cfg = get_config(resolved_package)
+            cache_key = mangle_key(key_generator(**kwargs), cfg.key_prefix, ttl)
+            await backend.aset(cache_key, value, ttl)
 
-get_async_backend = aget_backend
+        async def original(*args: Any, **kwargs: Any) -> Any:
+            return await original_fn(*args, **kwargs)
+
+        wrapper.invalidate = invalidate
+        wrapper.refresh = refresh
+        wrapper.get = get
+        wrapper.set = set
+        wrapper.original = original
+    else:
+        def invalidate(**kwargs: Any) -> None:
+            backend = manager.get_backend(resolved_package, resolved_backend, ttl)
+            cfg = get_config(resolved_package)
+            cache_key = mangle_key(key_generator(**kwargs), cfg.key_prefix, ttl)
+            backend.delete(cache_key)
+
+        def refresh(**kwargs: Any) -> Any:
+            invalidate(**kwargs)
+            return wrapper(**kwargs)
+
+        def get(default: Any = _MISSING, **kwargs: Any) -> Any:
+            backend = manager.get_backend(resolved_package, resolved_backend, ttl)
+            cfg = get_config(resolved_package)
+            cache_key = mangle_key(key_generator(**kwargs), cfg.key_prefix, ttl)
+            value = backend.get(cache_key)
+            if value is NO_VALUE:
+                if default is _MISSING:
+                    raise KeyError(f'No cached value for key {cache_key}')
+                return default
+            return value
+
+        def set(value: Any, **kwargs: Any) -> None:
+            backend = manager.get_backend(resolved_package, resolved_backend, ttl)
+            cfg = get_config(resolved_package)
+            cache_key = mangle_key(key_generator(**kwargs), cfg.key_prefix, ttl)
+            backend.set(cache_key, value, ttl)
+
+        def original(*args: Any, **kwargs: Any) -> Any:
+            return original_fn(*args, **kwargs)
+
+        wrapper.invalidate = invalidate
+        wrapper.refresh = refresh
+        wrapper.get = get
+        wrapper.set = set
+        wrapper.original = original

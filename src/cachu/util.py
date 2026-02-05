@@ -1,8 +1,11 @@
-"""Cache key generation and parameter filtering.
+"""Utility functions for cache key generation and validation.
 """
 import inspect
+import time
 from collections.abc import Callable
 from typing import Any
+
+from .api import CacheEntry
 
 
 def _is_connection_like(obj: Any) -> bool:
@@ -130,3 +133,21 @@ def _seconds_to_region_name(seconds: int) -> str:
         return f'{seconds // 3600}h'
     else:
         return f'{seconds // 86400}d'
+
+
+def validate_entry(
+    value: Any,
+    created_at: float | None,
+    validate: Callable[[CacheEntry], bool] | None,
+) -> bool:
+    """Validate a cached entry using the validate callback.
+    """
+    if validate is None or created_at is None:
+        return True
+
+    entry = CacheEntry(
+        value=value,
+        created_at=created_at,
+        age=time.time() - created_at,
+    )
+    return validate(entry)
