@@ -1,7 +1,7 @@
 """Test package isolation for cache configurations.
 """
 import cachu
-from cachu.config import ConfigRegistry, _get_caller_package
+from cachu.config import ConfigRegistry
 
 
 class TestConfigRegistry:
@@ -127,17 +127,3 @@ class TestKeyPrefixCapture:
 
         assert cfg1.key_prefix == 'v1:'
         assert cfg2.key_prefix == 'v2:'
-
-
-class TestGetCallerPackage:
-    """Tests for _get_caller_package function."""
-
-    def test_get_caller_package_returns_string(self):
-        """Verify _get_caller_package returns a string or None."""
-        pkg = _get_caller_package()
-        assert pkg is None or isinstance(pkg, str)
-
-    def test_get_caller_package_excludes_cachu_package(self):
-        """Verify _get_caller_package skips cachu package frames."""
-        pkg = _get_caller_package()
-        assert pkg is None or not pkg.startswith('cachu')

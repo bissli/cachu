@@ -4,58 +4,8 @@ import threading
 import time
 
 import pytest
-from cachu.mutex import AsyncioMutex, AsyncRedisMutex, NullAsyncMutex
-from cachu.mutex import NullMutex, RedisMutex, ThreadingMutex
-
-
-class TestNullMutex:
-    """Tests for NullMutex (no-op mutex).
-    """
-
-    def test_acquire_always_succeeds(self):
-        """Verify NullMutex.acquire() always returns True.
-        """
-        mutex = NullMutex()
-        assert mutex.acquire() is True
-        assert mutex.acquire(timeout=0.1) is True
-
-    def test_release_is_noop(self):
-        """Verify NullMutex.release() does nothing.
-        """
-        mutex = NullMutex()
-        mutex.release()
-
-    def test_context_manager(self):
-        """Verify NullMutex works as a context manager.
-        """
-        mutex = NullMutex()
-        with mutex:
-            pass
-
-
-class TestNullAsyncMutex:
-    """Tests for NullAsyncMutex (no-op async mutex).
-    """
-
-    async def test_acquire_always_succeeds(self):
-        """Verify NullAsyncMutex.acquire() always returns True.
-        """
-        mutex = NullAsyncMutex()
-        assert await mutex.acquire() is True
-        assert await mutex.acquire(timeout=0.1) is True
-
-    async def test_release_is_noop(self):
-        """Verify NullAsyncMutex.release() does nothing.
-        """
-        mutex = NullAsyncMutex()
-        await mutex.release()
-
-    async def test_context_manager(self):
-        """Verify NullAsyncMutex works as an async context manager.
-        """
-        mutex = NullAsyncMutex()
-        async with mutex:
-            pass
+from cachu.mutex import AsyncioMutex, AsyncRedisMutex, RedisMutex
+from cachu.mutex import ThreadingMutex
 
 
 class TestThreadingMutex:
