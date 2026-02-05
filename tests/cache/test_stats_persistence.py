@@ -85,7 +85,7 @@ class TestRedisStatsPersistence:
         """Verify two backend instances see same stats.
         """
         from cachu.backends.redis import RedisBackend
-        from fixtures.redis import redis_test_config
+        from _fixtures.redis import redis_test_config
 
         url = f'redis://{redis_test_config.host}:{redis_test_config.port}/0'
 
@@ -112,7 +112,7 @@ class TestRedisStatsPersistence:
         """Verify two async backend instances see same stats.
         """
         from cachu.backends.redis import RedisBackend
-        from fixtures.redis import redis_test_config
+        from _fixtures.redis import redis_test_config
 
         url = f'redis://{redis_test_config.host}:{redis_test_config.port}/0'
 

@@ -1,0 +1,242 @@
+"""Test cache configuration.
+"""
+import cachu
+import pytest
+from cachu.config import ConfigRegistry
+
+
+def test_configure_updates_settings(tmp_path):
+    """Verify configure() updates global configuration.
+    """
+    cachu.configure(key_prefix='v2:', file_dir=str(tmp_path))
+    cfg = cachu.get_config()
+    assert cfg.key_prefix == 'v2:'
+    assert cfg.file_dir == str(tmp_path)
+
+
+def test_configure_redis_settings():
+    """Verify Redis-specific configuration can be updated.
+    """
+    cachu.configure(redis_url='redis://redis.example.com:6380/1')
+    cfg = cachu.get_config()
+    assert cfg.redis_url == 'redis://redis.example.com:6380/1'
+
+
+def test_configure_backend_default_setting():
+    """Verify default backend can be changed via backend_default.
+    """
+    cachu.configure(backend_default='file')
+    cfg = cachu.get_config()
+    assert cfg.backend_default == 'file'
+
+
+def test_configure_invalid_backend_raises():
+    """Verify invalid backend raises ValueError.
+    """
+    with pytest.raises(ValueError, match='backend must be one of'):
+        cachu.configure(backend_default='invalid')
+
+
+def test_configure_invalid_file_dir_raises(tmp_path):
+    """Verify invalid file_dir raises ValueError.
+    """
+    with pytest.raises(ValueError, match='file_dir must be an existing directory'):
+        cachu.configure(file_dir='/nonexistent/path')
+
+
+def test_cache_uses_configured_default_backend():
+    """Verify @cache without backend uses configured default.
+    """
+    cachu.configure(backend_default='memory')
+    call_count = 0
+
+    @cachu.cache(ttl=300)
+    def expensive_func(x: int) -> int:
+        nonlocal call_count
+        call_count += 1
+        return x * 2
+
+    result1 = expensive_func(5)
+    result2 = expensive_func(5)
+
+    assert result1 == 10
+    assert result2 == 10
+    assert call_count == 1
+
+
+def test_cache_with_file_default(temp_cache_dir):
+    """Verify @cache uses file backend when configured as default.
+    """
+    cachu.configure(backend_default='file')
+    call_count = 0
+
+    @cachu.cache(ttl=300)
+    def expensive_func(x: int) -> int:
+        nonlocal call_count
+        call_count += 1
+        return x * 2
+
+    result1 = expensive_func(5)
+    result2 = expensive_func(5)
+
+    assert result1 == 10
+    assert result2 == 10
+    assert call_count == 1
+
+
+def test_explicit_backend_overrides_default():
+    """Verify explicit backend parameter overrides configured default.
+    """
+    cachu.configure(backend_default='file')
+
+    call_count = 0
+
+    @cachu.cache(ttl=300, backend='memory')
+    def func(x: int) -> int:
+        nonlocal call_count
+        call_count += 1
+        return x * 2
+
+    result1 = func(5)
+    result2 = func(5)
+
+    assert result1 == 10
+    assert result2 == 10
+    assert call_count == 1
+
+
+class TestConfigRegistry:
+    """Tests for ConfigRegistry class.
+    """
+
+    def test_registry_creates_new_config_for_package(self):
+        """Verify registry creates separate configs per package.
+        """
+        registry = ConfigRegistry()
+
+        cfg1 = registry.configure(package='pkg1', key_prefix='v1:')
+        cfg2 = registry.configure(package='pkg2', key_prefix='v2:')
+
+        assert cfg1.key_prefix == 'v1:'
+        assert cfg2.key_prefix == 'v2:'
+        assert cfg1 is not cfg2
+
+    def test_registry_returns_same_config_for_same_package(self, tmp_path):
+        """Verify registry returns existing config for same package.
+        """
+        registry = ConfigRegistry()
+
+        cfg1 = registry.configure(package='pkg1', key_prefix='v1:')
+        cfg2 = registry.configure(package='pkg1', file_dir=str(tmp_path))
+
+        assert cfg1 is cfg2
+        assert cfg1.key_prefix == 'v1:'
+        assert cfg1.file_dir == str(tmp_path)
+
+    def test_registry_get_config_returns_default_for_unknown_package(self):
+        """Verify get_config returns default config for unconfigured package.
+        """
+        registry = ConfigRegistry()
+        registry.configure(package='pkg1', key_prefix='v1:')
+
+        cfg = registry.get_config(package='unknown')
+
+        assert cfg.key_prefix == ''
+        assert cfg.backend_default == 'memory'
+
+    def test_registry_get_config_returns_configured_for_known_package(self):
+        """Verify get_config returns correct config for configured package.
+        """
+        registry = ConfigRegistry()
+        registry.configure(package='pkg1', key_prefix='v1:', backend_default='file')
+
+        cfg = registry.get_config(package='pkg1')
+
+        assert cfg.key_prefix == 'v1:'
+        assert cfg.backend_default == 'file'
+
+    def test_registry_get_all_packages(self):
+        """Verify get_all_packages returns all configured packages.
+        """
+        registry = ConfigRegistry()
+        registry.configure(package='pkg1')
+        registry.configure(package='pkg2')
+
+        packages = registry.get_all_packages()
+
+        assert 'pkg1' in packages
+        assert 'pkg2' in packages
+
+    def test_registry_clear_removes_all_configs(self):
+        """Verify clear removes all package configurations.
+        """
+        registry = ConfigRegistry()
+        registry.configure(package='pkg1', key_prefix='v1:')
+        registry.configure(package='pkg2', key_prefix='v2:')
+
+        registry.clear()
+
+        assert len(registry.get_all_packages()) == 0
+
+
+class TestGetConfig:
+    """Tests for get_config module function.
+    """
+
+    def test_get_config_returns_configured_values(self):
+        """Verify get_config returns config for caller's package.
+        """
+        cachu.configure(key_prefix='test:', backend_default='memory')
+
+        cfg = cachu.get_config()
+
+        assert cfg.key_prefix == 'test:'
+        assert cfg.backend_default == 'memory'
+
+    def test_get_config_with_explicit_package(self):
+        """Verify get_config can retrieve config for explicit package.
+        """
+        from cachu.config import _registry
+
+        _registry.configure(package='explicit_pkg', key_prefix='explicit:')
+
+        cfg = cachu.get_config(package='explicit_pkg')
+
+        assert cfg.key_prefix == 'explicit:'
+
+
+class TestKeyPrefixCapture:
+    """Tests for key_prefix capture at decoration time.
+    """
+
+    def test_key_prefix_captured_at_decoration(self):
+        """Verify key_prefix is captured when decorator is applied.
+        """
+        cachu.configure(key_prefix='v1:', backend_default='memory')
+
+        call_count = 0
+
+        @cachu.cache(ttl=300, backend='memory')
+        def func(x: int) -> int:
+            nonlocal call_count
+            call_count += 1
+            return x
+
+        func(5)
+        func(5)
+
+        assert call_count == 1
+
+    def test_different_packages_have_different_key_prefixes(self):
+        """Verify different packages can have different key prefixes.
+        """
+        from cachu.config import _registry
+
+        _registry.configure(package='pkg1', key_prefix='v1:')
+        _registry.configure(package='pkg2', key_prefix='v2:')
+
+        cfg1 = cachu.get_config(package='pkg1')
+        cfg2 = cachu.get_config(package='pkg2')
+
+        assert cfg1.key_prefix == 'v1:'
+        assert cfg2.key_prefix == 'v2:'
