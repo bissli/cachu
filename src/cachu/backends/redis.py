@@ -8,6 +8,9 @@ import time
 from collections.abc import AsyncIterator, Iterator
 from typing import TYPE_CHECKING, Any, Literal
 
+from redis.backoff import ExponentialBackoff
+from redis.retry import Retry
+
 from ..api import NO_VALUE, Backend
 from ..mutex import AsyncCacheMutex, AsyncRedisMutex, CacheMutex, RedisMutex
 
@@ -46,14 +49,44 @@ def _get_async_redis_module() -> Any:
         ) from e
 
 
-def get_redis_client(url: str) -> 'redis.Redis':
-    """Create a Redis client from URL.
-
-    Args:
-        url: Redis URL (e.g., 'redis://localhost:6379/0')
+def get_redis_client(
+    url: str,
+    health_check_interval: int = 30,
+    socket_timeout: float = 5.0,
+    retry_count: int = 3,
+) -> 'redis.Redis':
+    """Create a Redis client from URL with connection resilience.
     """
     redis_module = _get_redis_module()
-    return redis_module.from_url(url)
+    retry = Retry(ExponentialBackoff(), retries=retry_count)
+    return redis_module.from_url(
+        url,
+        health_check_interval=health_check_interval,
+        socket_connect_timeout=socket_timeout,
+        socket_timeout=socket_timeout,
+        retry_on_timeout=True,
+        retry=retry,
+    )
+
+
+def get_async_redis_client(
+    url: str,
+    health_check_interval: int = 30,
+    socket_timeout: float = 5.0,
+    retry_count: int = 3,
+) -> 'aioredis.Redis':
+    """Create an async Redis client from URL with connection resilience.
+    """
+    aioredis = _get_async_redis_module()
+    retry = Retry(ExponentialBackoff(), retries=retry_count)
+    return aioredis.from_url(
+        url,
+        health_check_interval=health_check_interval,
+        socket_connect_timeout=socket_timeout,
+        socket_timeout=socket_timeout,
+        retry_on_timeout=True,
+        retry=retry,
+    )
 
 
 def _pack_value(value: Any, created_at: float) -> bytes:
@@ -82,9 +115,19 @@ class RedisBackend(Backend):
     """Unified Redis cache backend with both sync and async interfaces.
     """
 
-    def __init__(self, url: str, lock_timeout: float = 10.0) -> None:
+    def __init__(
+        self,
+        url: str,
+        lock_timeout: float = 10.0,
+        health_check_interval: int = 30,
+        socket_timeout: float = 5.0,
+        retry_count: int = 3,
+    ) -> None:
         self._url = url
         self._lock_timeout = lock_timeout
+        self._health_check_interval = health_check_interval
+        self._socket_timeout = socket_timeout
+        self._retry_count = retry_count
         self._sync_client: redis.Redis | None = None
         self._async_client: aioredis.Redis | None = None
         self._init_lock = threading.Lock()
@@ -94,7 +137,12 @@ class RedisBackend(Backend):
         """Lazy-load sync Redis client.
         """
         if self._sync_client is None:
-            self._sync_client = get_redis_client(self._url)
+            self._sync_client = get_redis_client(
+                self._url,
+                self._health_check_interval,
+                self._socket_timeout,
+                self._retry_count,
+            )
         return self._sync_client
 
     def _get_async_client(self) -> 'aioredis.Redis':
@@ -102,8 +150,12 @@ class RedisBackend(Backend):
         """
         with self._init_lock:
             if self._async_client is None:
-                aioredis = _get_async_redis_module()
-                self._async_client = aioredis.from_url(self._url)
+                self._async_client = get_async_redis_client(
+                    self._url,
+                    self._health_check_interval,
+                    self._socket_timeout,
+                    self._retry_count,
+                )
             return self._async_client
 
     # ===== Sync interface =====
