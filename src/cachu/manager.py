@@ -50,7 +50,13 @@ class CacheManager:
             backend = SqliteBackend(filepath)
         elif backend_type == 'redis':
             from .backends.redis import RedisBackend
-            backend = RedisBackend(cfg.redis_url, cfg.lock_timeout)
+            backend = RedisBackend(
+                cfg.redis_url,
+                cfg.lock_timeout,
+                cfg.redis_health_check_interval,
+                cfg.redis_socket_timeout,
+                cfg.redis_retry_count,
+            )
         elif backend_type == 'null':
             from .backends.null import NullBackend
             backend = NullBackend()

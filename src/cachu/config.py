@@ -59,6 +59,9 @@ class CacheConfig:
     file_dir: str = '/tmp'
     redis_url: str = 'redis://localhost:6379/0'
     lock_timeout: float = 10.0
+    redis_health_check_interval: int = 30
+    redis_socket_timeout: float = 5.0
+    redis_retry_count: int = 3
 
 
 class ConfigRegistry:
@@ -81,6 +84,9 @@ class ConfigRegistry:
         file_dir: str | None = None,
         redis_url: str | None = None,
         lock_timeout: float | None = None,
+        redis_health_check_interval: int | None = None,
+        redis_socket_timeout: float | None = None,
+        redis_retry_count: int | None = None,
     ) -> CacheConfig:
         """Configure cache for a specific package.
         """
@@ -93,6 +99,9 @@ class ConfigRegistry:
             'file_dir': str(file_dir) if file_dir else None,
             'redis_url': redis_url,
             'lock_timeout': lock_timeout,
+            'redis_health_check_interval': redis_health_check_interval,
+            'redis_socket_timeout': redis_socket_timeout,
+            'redis_retry_count': redis_retry_count,
         }
         updates = {k: v for k, v in updates.items() if v is not None}
 
@@ -156,6 +165,9 @@ def configure(
     file_dir: str | None = None,
     redis_url: str | None = None,
     lock_timeout: float | None = None,
+    redis_health_check_interval: int | None = None,
+    redis_socket_timeout: float | None = None,
+    redis_retry_count: int | None = None,
 ) -> CacheConfig:
     """Configure cache settings for the caller's package.
 
@@ -168,6 +180,9 @@ def configure(
         file_dir: Directory for file-based caches
         redis_url: Redis connection URL (e.g., 'redis://localhost:6379/0')
         lock_timeout: Timeout for distributed locks in seconds (default: 10.0)
+        redis_health_check_interval: Seconds between connection health checks (default: 30)
+        redis_socket_timeout: Socket timeout in seconds (default: 5.0)
+        redis_retry_count: Number of retries on connection failure (default: 3)
     """
     return _registry.configure(
         backend_default=backend_default,
@@ -175,6 +190,9 @@ def configure(
         file_dir=str(file_dir) if file_dir else None,
         redis_url=redis_url,
         lock_timeout=lock_timeout,
+        redis_health_check_interval=redis_health_check_interval,
+        redis_socket_timeout=redis_socket_timeout,
+        redis_retry_count=redis_retry_count,
     )
 
 
