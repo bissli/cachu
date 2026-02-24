@@ -1,6 +1,6 @@
 """Flexible caching library with support for memory, file, and Redis backends.
 """
-__version__ = '0.3.1'
+__version__ = '0.3.2'
 
 from .api import Backend, CacheEntry, CacheInfo, CacheMeta
 from .backends.redis import get_redis_client
