@@ -3,6 +3,10 @@
 import cachu
 import pytest
 
+from cachu.config import _registry, get_config
+from cachu.manager import manager
+from cachu.util import mangle_key
+
 
 def test_cache_clear_all_keys():
     """Verify cache_clear removes all cached entries.
@@ -265,16 +269,19 @@ def test_cache_clear_creates_backend_and_clears(temp_cache_dir):
 
     package = _get_caller_package()
 
+    cfg = get_config(package)
+    key = mangle_key('test_func|file_tag|x=1', cfg.key_prefix, 888)
+
     backend = manager.get_backend(package, 'file', 888)
-    backend.set('14m:test_func||file_tag||x=1', 'test_value', 888)
-    assert backend.get('14m:test_func||file_tag||x=1') == 'test_value'
+    backend.set(key, 'test_value', 888)
+    assert backend.get(key) == 'test_value'
 
     clear_backends()
 
     cachu.cache_clear(backend='file', ttl=888, tag='file_tag')
 
     backend = manager.get_backend(package, 'file', 888)
-    assert backend.get('14m:test_func||file_tag||x=1') is NO_VALUE
+    assert backend.get(key) is NO_VALUE
 
 
 def test_cache_clear_resets_stats():
@@ -420,3 +427,48 @@ async def test_async_cache_clear_all_backends():
     assert info_a.misses == 0
     assert info_b.hits == 0
     assert info_b.misses == 0
+
+
+def test_cache_clear_respects_key_prefix():
+    """Verify cache_clear only removes keys matching the configured key_prefix.
+    """
+    from cachu.api import NO_VALUE
+    from cachu.config import _get_caller_package
+
+    package = _get_caller_package()
+    backend = manager.get_backend(package, 'memory', 300)
+
+    dev_key = mangle_key('func||x=1', 'dev:', 300)
+    prod_key = mangle_key('func||x=1', 'prod:', 300)
+    backend.set(dev_key, 'dev_value', 300)
+    backend.set(prod_key, 'prod_value', 300)
+
+    _registry._default.key_prefix = 'dev:'
+    cachu.cache_clear(backend='memory', ttl=300)
+
+    assert backend.get(dev_key) is NO_VALUE
+    assert backend.get(prod_key) == 'prod_value'
+
+
+def test_cache_clear_with_tag_respects_key_prefix():
+    """Verify cache_clear with tag only removes matching prefix+tag keys.
+    """
+    from cachu.api import NO_VALUE
+    from cachu.config import _get_caller_package
+
+    package = _get_caller_package()
+    backend = manager.get_backend(package, 'memory', 300)
+
+    dev_users_key = mangle_key('func|users|x=1', 'dev:', 300)
+    prod_users_key = mangle_key('func|users|x=1', 'prod:', 300)
+    dev_products_key = mangle_key('func|products|x=1', 'dev:', 300)
+    backend.set(dev_users_key, 'dev_users', 300)
+    backend.set(prod_users_key, 'prod_users', 300)
+    backend.set(dev_products_key, 'dev_products', 300)
+
+    _registry._default.key_prefix = 'dev:'
+    cachu.cache_clear(backend='memory', ttl=300, tag='users')
+
+    assert backend.get(dev_users_key) is NO_VALUE
+    assert backend.get(prod_users_key) == 'prod_users'
+    assert backend.get(dev_products_key) == 'dev_products'

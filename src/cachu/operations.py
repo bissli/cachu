@@ -130,6 +130,14 @@ def cache_clear(
         backends_to_clear = ['memory', 'file', 'redis', 'null']
 
     pattern = _tag_to_pattern(tag)
+    cfg = get_config(package)
+    if cfg.key_prefix:
+        prefix_glob = f'*:{cfg.key_prefix}*'
+        if pattern:
+            pattern = f'{prefix_glob[:-1]}{pattern}'
+        else:
+            pattern = prefix_glob
+
     total_cleared = 0
 
     if backend is not None and ttl is not None:
@@ -280,6 +288,14 @@ async def async_cache_clear(
         backends_to_clear = ['memory', 'file', 'redis', 'null']
 
     pattern = _tag_to_pattern(tag)
+    cfg = get_config(package)
+    if cfg.key_prefix:
+        prefix_glob = f'*:{cfg.key_prefix}*'
+        if pattern:
+            pattern = f'{prefix_glob[:-1]}{pattern}'
+        else:
+            pattern = prefix_glob
+
     total_cleared = 0
 
     if backend is not None and ttl is not None:
