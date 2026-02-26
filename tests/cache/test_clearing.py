@@ -472,3 +472,70 @@ def test_cache_clear_with_tag_respects_key_prefix():
     assert backend.get(dev_users_key) is NO_VALUE
     assert backend.get(prod_users_key) == 'prod_users'
     assert backend.get(dev_products_key) == 'dev_products'
+
+
+def test_cache_clear_global_ignores_prefix():
+    """Verify global_clear=True clears all keys regardless of key_prefix.
+    """
+    from cachu.api import NO_VALUE
+    from cachu.config import _get_caller_package
+
+    package = _get_caller_package()
+    backend = manager.get_backend(package, 'memory', 300)
+
+    dev_key = mangle_key('func||x=1', 'dev:', 300)
+    prod_key = mangle_key('func||x=1', 'prod:', 300)
+    backend.set(dev_key, 'dev_value', 300)
+    backend.set(prod_key, 'prod_value', 300)
+
+    _registry._default.key_prefix = 'dev:'
+    cachu.cache_clear(backend='memory', ttl=300, global_clear=True)
+
+    assert backend.get(dev_key) is NO_VALUE
+    assert backend.get(prod_key) is NO_VALUE
+
+
+def test_cache_clear_global_with_tag():
+    """Verify global_clear=True still respects tag filtering.
+    """
+    from cachu.api import NO_VALUE
+    from cachu.config import _get_caller_package
+
+    package = _get_caller_package()
+    backend = manager.get_backend(package, 'memory', 300)
+
+    dev_users_key = mangle_key('func|users|x=1', 'dev:', 300)
+    prod_users_key = mangle_key('func|users|x=1', 'prod:', 300)
+    dev_products_key = mangle_key('func|products|x=1', 'dev:', 300)
+    backend.set(dev_users_key, 'dev_users', 300)
+    backend.set(prod_users_key, 'prod_users', 300)
+    backend.set(dev_products_key, 'dev_products', 300)
+
+    _registry._default.key_prefix = 'dev:'
+    cachu.cache_clear(backend='memory', ttl=300, tag='users', global_clear=True)
+
+    assert backend.get(dev_users_key) is NO_VALUE
+    assert backend.get(prod_users_key) is NO_VALUE
+    assert backend.get(dev_products_key) == 'dev_products'
+
+
+@pytest.mark.asyncio
+async def test_async_cache_clear_global_ignores_prefix():
+    """Verify async global_clear=True clears all keys regardless of key_prefix.
+    """
+    from cachu.api import NO_VALUE
+    from cachu.config import _get_caller_package
+
+    package = _get_caller_package()
+    backend = manager.get_backend(package, 'memory', 300)
+
+    dev_key = mangle_key('func||x=1', 'dev:', 300)
+    prod_key = mangle_key('func||x=1', 'prod:', 300)
+    backend.set(dev_key, 'dev_value', 300)
+    backend.set(prod_key, 'prod_value', 300)
+
+    _registry._default.key_prefix = 'dev:'
+    await cachu.async_cache_clear(backend='memory', ttl=300, global_clear=True)
+
+    assert backend.get(dev_key) is NO_VALUE
+    assert backend.get(prod_key) is NO_VALUE
