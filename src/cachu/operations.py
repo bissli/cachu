@@ -109,6 +109,7 @@ def cache_clear(
     backend: str | None = None,
     ttl: int | None = None,
     package: str | None = None,
+    global_clear: bool = False,
 ) -> int:
     """Clear cache entries matching criteria.
 
@@ -117,6 +118,7 @@ def cache_clear(
         backend: Backend type to clear ('memory', 'file', 'redis'). Clears all if None.
         ttl: Specific TTL region to clear. Clears all TTLs if None.
         package: Package to clear for. Auto-detected if None.
+        global_clear: If True, skip key_prefix scoping and clear all keys.
 
     Returns
         Number of entries cleared (may be approximate)
@@ -130,13 +132,14 @@ def cache_clear(
         backends_to_clear = ['memory', 'file', 'redis', 'null']
 
     pattern = _tag_to_pattern(tag)
-    cfg = get_config(package)
-    if cfg.key_prefix:
-        prefix_glob = f'*:{cfg.key_prefix}*'
-        if pattern:
-            pattern = f'{prefix_glob[:-1]}{pattern}'
-        else:
-            pattern = prefix_glob
+    if not global_clear:
+        cfg = get_config(package)
+        if cfg.key_prefix:
+            prefix_glob = f'*:{cfg.key_prefix}*'
+            if pattern:
+                pattern = f'{prefix_glob[:-1]}{pattern}'
+            else:
+                pattern = prefix_glob
 
     total_cleared = 0
 
@@ -267,6 +270,7 @@ async def async_cache_clear(
     backend: str | None = None,
     ttl: int | None = None,
     package: str | None = None,
+    global_clear: bool = False,
 ) -> int:
     """Clear async cache entries matching criteria.
 
@@ -275,6 +279,7 @@ async def async_cache_clear(
         backend: Backend type to clear ('memory', 'file', 'redis'). Clears all if None.
         ttl: Specific TTL region to clear. Clears all TTLs if None.
         package: Package to clear for. Auto-detected if None.
+        global_clear: If True, skip key_prefix scoping and clear all keys.
 
     Returns
         Number of entries cleared (may be approximate)
@@ -288,13 +293,14 @@ async def async_cache_clear(
         backends_to_clear = ['memory', 'file', 'redis', 'null']
 
     pattern = _tag_to_pattern(tag)
-    cfg = get_config(package)
-    if cfg.key_prefix:
-        prefix_glob = f'*:{cfg.key_prefix}*'
-        if pattern:
-            pattern = f'{prefix_glob[:-1]}{pattern}'
-        else:
-            pattern = prefix_glob
+    if not global_clear:
+        cfg = get_config(package)
+        if cfg.key_prefix:
+            prefix_glob = f'*:{cfg.key_prefix}*'
+            if pattern:
+                pattern = f'{prefix_glob[:-1]}{pattern}'
+            else:
+                pattern = prefix_glob
 
     total_cleared = 0
 
