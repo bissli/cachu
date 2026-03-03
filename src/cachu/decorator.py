@@ -40,7 +40,10 @@ def cache(
                   Called with result value, caches if returns True.
         validate: Function to validate cached entries before returning.
                   Called with CacheEntry, returns False to recompute.
-        package: Package name for config isolation. Auto-detected if None.
+        package: Package name for config isolation. Auto-detected from the
+                 calling module's top-level package if None. Use explicit
+                 values when code may be vendored or bundled into other
+                 packages.
 
     Per-call control via reserved kwargs (not passed to function):
         _skip_cache: If True, bypass cache completely for this call
@@ -87,6 +90,9 @@ def cache(
         resolved_backend = backend
 
     def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
+        logger.debug(
+            f'@cache {fn.__name__}: package={resolved_package!r}, '
+            f'backend={resolved_backend!r}, ttl={ttl_for_backend}')
         key_generator = make_key_generator(fn, tag, exclude)
         is_async = asyncio.iscoroutinefunction(fn)
 

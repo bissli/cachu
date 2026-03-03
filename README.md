@@ -98,7 +98,13 @@ def get_user(user_id: int) -> dict:
 
 ### Package Isolation
 
-Each package automatically gets isolated configuration, preventing conflicts when multiple libraries use cachu:
+The `package` parameter selects which configuration your `@cache` calls use, so multiple
+libraries sharing `cachu` never collide.
+
+**How auto-detection works:** When `package` is not specified, cachu walks the call stack
+and takes the top-level package name from the caller's `__name__`. For example, if
+`@cache` is applied inside `mylib.utils.foo`, the resolved package is `mylib`. When the
+caller is `__main__`, cachu uses the script filename instead (e.g. `__main__.app`).
 
 ```python
 # In library_a/config.py
@@ -112,15 +118,31 @@ cachu.configure(key_prefix='lib_b:', redis_url='redis://redis-b:6379/0')
 # Each library's @cache calls use its own configuration automatically
 ```
 
-To override the automatic detection, specify the `package` parameter:
+**When to use explicit `package=`:** Use it when your code might be imported from
+different packages (vendored, bundled), or when you want deterministic behavior
+regardless of call context:
 
 ```python
 from cachu import cache
 
-# This function will use library_a's configuration
+# This function will always use library_a's configuration
 @cache(ttl=300, package='library_a')
 def get_shared_data(id: int) -> dict:
     return fetch(id)
+```
+
+**Debugging:** Enable `DEBUG` logging on the `cachu` logger to see which package and
+backend each decorated function resolved to:
+
+```python
+import logging
+logging.getLogger('cachu').setLevel(logging.DEBUG)
+```
+
+Example output:
+
+```
+DEBUG:cachu.decorator:@cache get_user: package='mylib', backend='memory', ttl=300
 ```
 
 Retrieve configuration:
