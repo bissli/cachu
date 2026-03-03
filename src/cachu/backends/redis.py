@@ -8,9 +8,6 @@ import time
 from collections.abc import AsyncIterator, Iterator
 from typing import TYPE_CHECKING, Any, Literal
 
-from redis.backoff import ExponentialBackoff
-from redis.retry import Retry
-
 from ..api import NO_VALUE, Backend
 from ..mutex import AsyncCacheMutex, AsyncRedisMutex, CacheMutex, RedisMutex
 
@@ -58,7 +55,8 @@ def get_redis_client(
     """Create a Redis client from URL with connection resilience.
     """
     redis_module = _get_redis_module()
-    retry = Retry(ExponentialBackoff(), retries=retry_count)
+    retry = redis_module.retry.Retry(
+        redis_module.backoff.ExponentialBackoff(), retries=retry_count)
     return redis_module.from_url(
         url,
         health_check_interval=health_check_interval,
@@ -78,7 +76,9 @@ def get_async_redis_client(
     """Create an async Redis client from URL with connection resilience.
     """
     aioredis = _get_async_redis_module()
-    retry = Retry(ExponentialBackoff(), retries=retry_count)
+    redis_module = _get_redis_module()
+    retry = redis_module.retry.Retry(
+        redis_module.backoff.ExponentialBackoff(), retries=retry_count)
     return aioredis.from_url(
         url,
         health_check_interval=health_check_interval,
