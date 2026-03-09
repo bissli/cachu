@@ -9,7 +9,8 @@ from typing import Any
 from .api import NO_VALUE, CacheEntry, CacheInfo, CacheMeta
 from .config import _get_caller_package, get_config, is_disabled
 from .manager import manager
-from .util import make_key_generator, mangle_key, validate_entry
+from .util import make_key_generator, make_partial_pattern, mangle_key
+from .util import validate_entry
 
 logger = logging.getLogger(__name__)
 
@@ -72,8 +73,8 @@ def cache(
         # Force refresh
         user = get_user(123, _overwrite_cache=True)
 
-        # Invalidate specific entry
-        get_user.invalidate(user_id=123)
+        # Clear specific entry
+        get_user.clear(user_id=123)
 
         # Refresh specific entry
         user = get_user.refresh(user_id=123)
@@ -94,6 +95,7 @@ def cache(
             f'@cache {fn.__name__}: package={resolved_package!r}, '
             f'backend={resolved_backend!r}, ttl={ttl_for_backend}')
         key_generator = make_key_generator(fn, tag, exclude)
+        fn_name = getattr(fn, '__wrapped__', fn).__name__
         is_async = asyncio.iscoroutinefunction(fn)
 
         meta = CacheMeta(
@@ -157,7 +159,9 @@ def cache(
 
             async_wrapper._cache_meta = meta
             async_wrapper._cache_key_generator = key_generator
-            _attach_helpers(async_wrapper, key_generator, resolved_package, resolved_backend, ttl_for_backend, is_async=True, original_fn=fn)
+            _attach_helpers(async_wrapper, key_generator, resolved_package,
+                            resolved_backend, ttl_for_backend, is_async=True,
+                            original_fn=fn, fn_name=fn_name, tag=tag)
             return async_wrapper
 
         else:
@@ -206,7 +210,9 @@ def cache(
 
             sync_wrapper._cache_meta = meta
             sync_wrapper._cache_key_generator = key_generator
-            _attach_helpers(sync_wrapper, key_generator, resolved_package, resolved_backend, ttl_for_backend, is_async=False, original_fn=fn)
+            _attach_helpers(sync_wrapper, key_generator, resolved_package,
+                            resolved_backend, ttl_for_backend, is_async=False,
+                            original_fn=fn, fn_name=fn_name, tag=tag)
             return sync_wrapper
 
     return decorator
@@ -268,18 +274,22 @@ def _attach_helpers(
     ttl: int,
     is_async: bool,
     original_fn: Callable[..., Any],
+    fn_name: str = '',
+    tag: str = '',
 ) -> None:
-    """Attach helper methods to wrapper (.invalidate, .refresh, .get, .set, .original).
+    """Attach helper methods to wrapper (.clear, .refresh, .get, .set, .original).
     """
     if is_async:
-        async def invalidate(**kwargs: Any) -> None:
+        async def clear(_global: bool = False, **kwargs: Any) -> int:
             backend = await manager.aget_backend(resolved_package, resolved_backend, ttl)
             cfg = get_config(resolved_package)
-            cache_key = mangle_key(key_generator(**kwargs), cfg.key_prefix, ttl)
-            await backend.adelete(cache_key)
+            pattern = make_partial_pattern(
+                fn_name, tag, cfg.key_prefix, ttl,
+                global_clear=_global, **kwargs)
+            return await backend.aclear(pattern)
 
         async def refresh(**kwargs: Any) -> Any:
-            await invalidate(**kwargs)
+            await clear(**kwargs)
             return await wrapper(**kwargs)
 
         async def get(default: Any = _MISSING, **kwargs: Any) -> Any:
@@ -302,20 +312,22 @@ def _attach_helpers(
         async def original(*args: Any, **kwargs: Any) -> Any:
             return await original_fn(*args, **kwargs)
 
-        wrapper.invalidate = invalidate
+        wrapper.clear = clear
         wrapper.refresh = refresh
         wrapper.get = get
         wrapper.set = set
         wrapper.original = original
     else:
-        def invalidate(**kwargs: Any) -> None:
+        def clear(_global: bool = False, **kwargs: Any) -> int:
             backend = manager.get_backend(resolved_package, resolved_backend, ttl)
             cfg = get_config(resolved_package)
-            cache_key = mangle_key(key_generator(**kwargs), cfg.key_prefix, ttl)
-            backend.delete(cache_key)
+            pattern = make_partial_pattern(
+                fn_name, tag, cfg.key_prefix, ttl,
+                global_clear=_global, **kwargs)
+            return backend.clear(pattern)
 
         def refresh(**kwargs: Any) -> Any:
-            invalidate(**kwargs)
+            clear(**kwargs)
             return wrapper(**kwargs)
 
         def get(default: Any = _MISSING, **kwargs: Any) -> Any:
@@ -338,7 +350,7 @@ def _attach_helpers(
         def original(*args: Any, **kwargs: Any) -> Any:
             return original_fn(*args, **kwargs)
 
-        wrapper.invalidate = invalidate
+        wrapper.clear = clear
         wrapper.refresh = refresh
         wrapper.get = get
         wrapper.set = set

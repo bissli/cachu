@@ -176,7 +176,7 @@ class _GenericBackendTestSuite(ABC):
         assert info.misses == 2
 
     def test_invalidate_removes_entry(self):
-        """Verify func.invalidate() removes specific cache entry.
+        """Verify func.clear() removes specific cache entry.
         """
         call_count = 0
 
@@ -191,13 +191,13 @@ class _GenericBackendTestSuite(ABC):
         compute(5)
         assert call_count == 1
 
-        compute.invalidate(x=5)
+        compute.clear(x=5)
 
         compute(5)
         assert call_count == 2
 
     def test_invalidate_only_removes_matching_key(self):
-        """Verify func.invalidate() doesn't affect other keys.
+        """Verify func.clear() doesn't affect other keys.
         """
         call_count = 0
 
@@ -211,7 +211,7 @@ class _GenericBackendTestSuite(ABC):
         compute(10)
         assert call_count == 2
 
-        compute.invalidate(x=5)
+        compute.clear(x=5)
 
         compute(5)
         assert call_count == 3
@@ -574,7 +574,7 @@ class _GenericAsyncBackendTestSuite(ABC):
         assert info.misses == 2
 
     async def test_async_invalidate_removes_entry(self):
-        """Verify async func.invalidate() removes specific cache entry.
+        """Verify async func.clear() removes specific cache entry.
         """
         call_count = 0
 
@@ -589,13 +589,13 @@ class _GenericAsyncBackendTestSuite(ABC):
         await compute(5)
         assert call_count == 1
 
-        await compute.invalidate(x=5)
+        await compute.clear(x=5)
 
         await compute(5)
         assert call_count == 2
 
     async def test_async_invalidate_only_removes_matching_key(self):
-        """Verify async func.invalidate() doesn't affect other keys.
+        """Verify async func.clear() doesn't affect other keys.
         """
         call_count = 0
 
@@ -609,7 +609,7 @@ class _GenericAsyncBackendTestSuite(ABC):
         await compute(10)
         assert call_count == 2
 
-        await compute.invalidate(x=5)
+        await compute.clear(x=5)
 
         await compute(5)
         assert call_count == 3
