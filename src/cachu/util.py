@@ -135,6 +135,42 @@ def _seconds_to_region_name(seconds: int) -> str:
         return f'{seconds // 86400}d'
 
 
+def make_partial_pattern(
+    fn_name: str,
+    tag: str,
+    key_prefix: str,
+    ttl: int,
+    global_clear: bool = False,
+    **kwargs: Any,
+) -> str:
+    """Build a glob pattern for clearing cache entries.
+
+    Constructs patterns matching the key format produced by
+    make_key_generator + mangle_key. Supports exact (all params),
+    partial (some params), and blanket (no params) matching.
+    """
+    region = _seconds_to_region_name(ttl)
+    norm_tag = _normalize_tag(tag)
+
+    if tag:
+        base = f'{fn_name}|{norm_tag}'
+    else:
+        base = fn_name
+
+    if global_clear:
+        prefix = f'*{base}|'
+    else:
+        prefix = f'{region}:{key_prefix}{base}|'
+
+    if kwargs:
+        fragments = [f'{k}={repr(v)}' for k, v in sorted(kwargs.items())]
+        params = f'*{"*".join(fragments)}*'
+    else:
+        params = '*'
+
+    return f'{prefix}{params}'
+
+
 def validate_entry(
     value: Any,
     created_at: float | None,

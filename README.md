@@ -304,10 +304,10 @@ cached = get_user.get(default=None, user_id=123)  # Returns None if not cached
 # .set() - store a value directly in the cache
 get_user.set({'id': 123, 'name': 'Test'}, user_id=123)
 
-# .invalidate() - remove a specific entry from cache
-get_user.invalidate(user_id=123)
+# .clear() - remove a specific entry from cache
+get_user.clear(user_id=123)
 
-# .refresh() - invalidate and re-fetch
+# .refresh() - clear and re-fetch
 user = get_user.refresh(user_id=123)
 
 # .original() - call the original function, bypassing cache entirely
@@ -323,7 +323,7 @@ async def get_user(user_id: int) -> dict:
 
 cached = await get_user.get(user_id=123)
 await get_user.set({'id': 123}, user_id=123)
-await get_user.invalidate(user_id=123)
+await get_user.clear(user_id=123)
 user = await get_user.refresh(user_id=123)
 user = await get_user.original(123)
 ```
@@ -574,7 +574,7 @@ from cachu import (
 - **Conditional caching**: Cache based on result value
 - **Validation callbacks**: Validate entries before returning
 - **Per-call control**: Skip or overwrite cache per call
-- **Helper methods**: `.get()`, `.set()`, `.invalidate()`, `.refresh()`, `.original()` on decorated functions
+- **Helper methods**: `.get()`, `.set()`, `.clear()`, `.refresh()`, `.original()` on decorated functions
 - **Statistics**: Track hits, misses, and cache size
 - **Intelligent filtering**: Auto-excludes `self`, `cls`, connections, and `_` params
 - **Global disable**: Bypass all caching for testing

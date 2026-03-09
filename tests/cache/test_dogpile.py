@@ -360,7 +360,7 @@ class TestConcurrentInvalidation:
 
         def invalidate_worker():
             computation_started.wait(timeout=1)
-            slow_compute.invalidate(x=5)
+            slow_compute.clear(x=5)
             invalidation_done.set()
 
         t1 = threading.Thread(target=compute_worker)
@@ -389,7 +389,7 @@ class TestConcurrentInvalidation:
         compute(5)
         assert call_count == 1
 
-        compute.invalidate(x=5)
+        compute.clear(x=5)
 
         compute(5)
         assert call_count == 2
@@ -476,7 +476,7 @@ class TestAsyncConcurrentInvalidation:
 
         async def invalidate_task():
             await asyncio.wait_for(computation_started.wait(), timeout=1)
-            await slow_compute.invalidate(x=5)
+            await slow_compute.clear(x=5)
             invalidation_done.set()
 
         await asyncio.gather(compute_task(), invalidate_task())

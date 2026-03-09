@@ -54,14 +54,14 @@ class TestNullBackendWithDecorator:
         assert call_count == 3
 
     def test_invalidate_is_noop(self):
-        """Verify invalidate() works without error on null backend.
+        """Verify clear() works without error on null backend.
         """
         @cachu.cache(ttl=60, backend='null')
         def compute(x: int) -> int:
             return x * 2
 
         compute(5)
-        compute.invalidate(x=5)
+        compute.clear(x=5)
 
     def test_refresh_always_executes(self):
         """Verify refresh() always executes function on null backend.

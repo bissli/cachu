@@ -1,4 +1,4 @@
-"""Tests for decorator helper methods (.invalidate, .refresh).
+"""Tests for decorator helper methods (.clear, .refresh).
 """
 import cachu
 import pytest
@@ -9,7 +9,7 @@ class TestSyncHelperMethods:
     """
 
     def test_invalidate_removes_cached_entry(self):
-        """Verify func.invalidate() removes specific entry.
+        """Verify func.clear() removes specific entry.
         """
         call_count = 0
 
@@ -24,13 +24,13 @@ class TestSyncHelperMethods:
         compute(5)
         assert call_count == 1
 
-        compute.invalidate(x=5)
+        compute.clear(x=5)
 
         compute(5)
         assert call_count == 2
 
     def test_invalidate_only_removes_matching_key(self):
-        """Verify func.invalidate() only removes the matching key.
+        """Verify func.clear() only removes the matching key.
         """
         call_count = 0
 
@@ -44,7 +44,7 @@ class TestSyncHelperMethods:
         compute(10)
         assert call_count == 2
 
-        compute.invalidate(x=5)
+        compute.clear(x=5)
 
         compute(5)
         assert call_count == 3
@@ -75,7 +75,7 @@ class TestSyncHelperMethods:
         assert result3 == 10
 
     def test_invalidate_with_multiple_params(self):
-        """Verify func.invalidate() works with multiple parameters.
+        """Verify func.clear() works with multiple parameters.
         """
         call_count = 0
 
@@ -89,7 +89,7 @@ class TestSyncHelperMethods:
         compute(3, 4)
         assert call_count == 2
 
-        compute.invalidate(a=1, b=2)
+        compute.clear(a=1, b=2)
 
         compute(1, 2)
         assert call_count == 3
@@ -171,7 +171,7 @@ class TestAsyncHelperMethods:
     """
 
     async def test_invalidate_removes_cached_entry(self):
-        """Verify async func.invalidate() removes specific entry.
+        """Verify async func.clear() removes specific entry.
         """
         call_count = 0
 
@@ -186,13 +186,13 @@ class TestAsyncHelperMethods:
         await compute(5)
         assert call_count == 1
 
-        await compute.invalidate(x=5)
+        await compute.clear(x=5)
 
         await compute(5)
         assert call_count == 2
 
     async def test_invalidate_only_removes_matching_key(self):
-        """Verify async func.invalidate() only removes the matching key.
+        """Verify async func.clear() only removes the matching key.
         """
         call_count = 0
 
@@ -206,7 +206,7 @@ class TestAsyncHelperMethods:
         await compute(10)
         assert call_count == 2
 
-        await compute.invalidate(x=5)
+        await compute.clear(x=5)
 
         await compute(5)
         assert call_count == 3
@@ -237,7 +237,7 @@ class TestAsyncHelperMethods:
         assert result3 == 10
 
     async def test_invalidate_with_multiple_params(self):
-        """Verify async func.invalidate() works with multiple parameters.
+        """Verify async func.clear() works with multiple parameters.
         """
         call_count = 0
 
@@ -251,7 +251,7 @@ class TestAsyncHelperMethods:
         await compute(3, 4)
         assert call_count == 2
 
-        await compute.invalidate(a=1, b=2)
+        await compute.clear(a=1, b=2)
 
         await compute(1, 2)
         assert call_count == 3
@@ -346,7 +346,7 @@ class TestHelperMethodsWithFileBackend:
         compute(5)
         assert call_count == 1
 
-        compute.invalidate(x=5)
+        compute.clear(x=5)
 
         compute(5)
         assert call_count == 2
@@ -365,7 +365,7 @@ class TestHelperMethodsWithFileBackend:
         await compute(5)
         assert call_count == 1
 
-        await compute.invalidate(x=5)
+        await compute.clear(x=5)
 
         await compute(5)
         assert call_count == 2
@@ -390,7 +390,7 @@ class TestHelperMethodsWithRedisBackend:
         compute(5)
         assert call_count == 1
 
-        compute.invalidate(x=5)
+        compute.clear(x=5)
 
         compute(5)
         assert call_count == 2
@@ -409,7 +409,189 @@ class TestHelperMethodsWithRedisBackend:
         await compute(5)
         assert call_count == 1
 
-        await compute.invalidate(x=5)
+        await compute.clear(x=5)
 
         await compute(5)
         assert call_count == 2
+
+
+class TestSyncClearMethod:
+    """Tests for .clear() with partial and blanket matching.
+    """
+
+    def test_clear_removes_all_entries(self):
+        """Verify .clear() with no args removes all entries for function.
+        """
+        call_count = 0
+
+        @cachu.cache(ttl=60, backend='memory')
+        def compute(x: int) -> int:
+            nonlocal call_count
+            call_count += 1
+            return x * 2
+
+        compute(1)
+        compute(2)
+        assert call_count == 2
+
+        cleared = compute.clear()
+        assert cleared == 2
+
+        compute(1)
+        compute(2)
+        assert call_count == 4
+
+    def test_clear_with_partial_kwargs(self):
+        """Verify .clear() with partial kwargs clears matching subset.
+        """
+        call_count = 0
+
+        @cachu.cache(ttl=60, backend='memory')
+        def compute(x: int, y: int) -> int:
+            nonlocal call_count
+            call_count += 1
+            return x + y
+
+        compute(1, 1)
+        compute(1, 2)
+        compute(2, 1)
+        assert call_count == 3
+
+        cleared = compute.clear(x=1)
+        assert cleared == 2
+
+        compute(1, 1)
+        assert call_count == 4
+        compute(1, 2)
+        assert call_count == 5
+        compute(2, 1)
+        assert call_count == 5
+
+    def test_clear_returns_count(self):
+        """Verify .clear() returns number of entries cleared.
+        """
+        @cachu.cache(ttl=60, backend='memory')
+        def compute(x: int) -> int:
+            return x * 2
+
+        compute(1)
+        compute(2)
+        compute(3)
+
+        cleared = compute.clear()
+        assert cleared == 3
+
+    def test_clear_no_match_returns_zero(self):
+        """Verify .clear() returns 0 when no entries match.
+        """
+        @cachu.cache(ttl=60, backend='memory')
+        def compute(x: int) -> int:
+            return x * 2
+
+        cleared = compute.clear(x=999)
+        assert cleared == 0
+
+
+class TestSyncClearGlobal:
+    """Tests for .clear(_global=True).
+    """
+
+    def test_clear_with_global(self):
+        """Verify .clear(_global=True) skips key_prefix scoping.
+        """
+        cachu.configure(key_prefix='pfx:')
+
+        call_count = 0
+
+        @cachu.cache(ttl=60, backend='memory')
+        def compute(x: int) -> int:
+            nonlocal call_count
+            call_count += 1
+            return x * 2
+
+        compute(1)
+        compute(2)
+        assert call_count == 2
+
+        cleared = compute.clear(_global=True)
+        assert cleared == 2
+
+        compute(1)
+        assert call_count == 3
+
+
+class TestAsyncClearMethod:
+    """Tests for async .clear() with partial and blanket matching.
+    """
+
+    async def test_clear_removes_all_entries(self):
+        """Verify async .clear() with no args removes all entries.
+        """
+        call_count = 0
+
+        @cachu.cache(ttl=60, backend='memory')
+        async def compute(x: int) -> int:
+            nonlocal call_count
+            call_count += 1
+            return x * 2
+
+        await compute(1)
+        await compute(2)
+        assert call_count == 2
+
+        cleared = await compute.clear()
+        assert cleared == 2
+
+        await compute(1)
+        await compute(2)
+        assert call_count == 4
+
+    async def test_clear_with_partial_kwargs(self):
+        """Verify async .clear() with partial kwargs clears matching subset.
+        """
+        call_count = 0
+
+        @cachu.cache(ttl=60, backend='memory')
+        async def compute(x: int, y: int) -> int:
+            nonlocal call_count
+            call_count += 1
+            return x + y
+
+        await compute(1, 1)
+        await compute(1, 2)
+        await compute(2, 1)
+        assert call_count == 3
+
+        cleared = await compute.clear(x=1)
+        assert cleared == 2
+
+        await compute(1, 1)
+        assert call_count == 4
+        await compute(1, 2)
+        assert call_count == 5
+        await compute(2, 1)
+        assert call_count == 5
+
+    async def test_clear_returns_count(self):
+        """Verify async .clear() returns number of entries cleared.
+        """
+        @cachu.cache(ttl=60, backend='memory')
+        async def compute(x: int) -> int:
+            return x * 2
+
+        await compute(1)
+        await compute(2)
+        await compute(3)
+
+        cleared = await compute.clear()
+        assert cleared == 3
+
+    async def test_clear_no_match_returns_zero(self):
+        """Verify async .clear() returns 0 when no entries match.
+        """
+        @cachu.cache(ttl=60, backend='memory')
+        async def compute(x: int) -> int:
+            return x * 2
+
+        cleared = await compute.clear(x=999)
+        assert cleared == 0
