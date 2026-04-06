@@ -2,7 +2,6 @@
 """
 import cachu
 import pytest
-
 from cachu.config import _registry, get_config
 from cachu.manager import manager
 from cachu.util import mangle_key
@@ -539,3 +538,153 @@ async def test_async_cache_clear_global_ignores_prefix():
 
     assert backend.get(dev_key) is NO_VALUE
     assert backend.get(prod_key) is NO_VALUE
+
+
+def test_clear_filters_underscore_params():
+    """Verify .clear() ignores underscore-prefixed kwargs matching key generation.
+    """
+    call_count = 0
+
+    @cachu.cache(ttl=300, backend='memory')
+    def compute(x: int, _debug: str = '') -> int:
+        nonlocal call_count
+        call_count += 1
+        return x * 2
+
+    compute(5, _debug='verbose')
+    assert call_count == 1
+    compute(5, _debug='quiet')
+    assert call_count == 1
+
+    compute.clear(_debug='verbose', x=5)
+
+    compute(5, _debug='any')
+    assert call_count == 2
+
+
+def test_clear_filters_connection_params():
+    """Verify .clear() ignores connection-like kwargs matching key generation.
+    """
+    call_count = 0
+
+    class MockConnection:
+        def __init__(self):
+            self.driver_connection = True
+
+    @cachu.cache(ttl=300, backend='memory')
+    def query(conn, user_id: int) -> dict:
+        nonlocal call_count
+        call_count += 1
+        return {'user_id': user_id}
+
+    conn1 = MockConnection()
+    conn2 = MockConnection()
+
+    query(conn1, 123)
+    assert call_count == 1
+    query(conn2, 123)
+    assert call_count == 1
+
+    query.clear(conn=conn1, user_id=123)
+
+    query(conn1, 123)
+    assert call_count == 2
+
+
+def test_clear_filters_excluded_params():
+    """Verify .clear() ignores kwargs in the exclude set.
+    """
+    call_count = 0
+
+    @cachu.cache(ttl=300, backend='memory', exclude={'logger'})
+    def process(logger: str, user_id: int) -> dict:
+        nonlocal call_count
+        call_count += 1
+        return {'user_id': user_id}
+
+    process('log1', 123)
+    assert call_count == 1
+    process('log2', 123)
+    assert call_count == 1
+
+    process.clear(logger='log1', user_id=123)
+
+    process('log3', 123)
+    assert call_count == 2
+
+
+def test_clear_filters_all_kwargs_falls_back_to_blanket_clear():
+    """Verify .clear() does blanket clear when all kwargs are filtered out.
+    """
+    call_count = 0
+
+    class MockConnection:
+        def __init__(self):
+            self.driver_connection = True
+
+    @cachu.cache(ttl=300, backend='memory')
+    def query(conn, user_id: int) -> dict:
+        nonlocal call_count
+        call_count += 1
+        return {'user_id': user_id}
+
+    conn = MockConnection()
+    query(conn, 1)
+    query(conn, 2)
+    assert call_count == 2
+
+    query.clear(conn=conn)
+
+    query(conn, 1)
+    query(conn, 2)
+    assert call_count == 4
+
+
+def test_clear_filters_combined():
+    """Verify .clear() filters underscore, connection, and excluded params together.
+    """
+    call_count = 0
+
+    class MockConnection:
+        def __init__(self):
+            self.driver_connection = True
+
+    @cachu.cache(ttl=300, backend='memory', exclude={'context'})
+    def process(conn, _debug: str, context: str, user_id: int) -> dict:
+        nonlocal call_count
+        call_count += 1
+        return {'user_id': user_id}
+
+    conn = MockConnection()
+    process(conn, 'verbose', 'ctx1', 42)
+    assert call_count == 1
+    process(conn, 'quiet', 'ctx2', 42)
+    assert call_count == 1
+
+    process.clear(conn=conn, _debug='verbose', context='ctx1', user_id=42)
+
+    process(conn, 'any', 'any', 42)
+    assert call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_async_clear_filters_excluded_params():
+    """Verify async .clear() ignores kwargs in the exclude set.
+    """
+    call_count = 0
+
+    @cachu.cache(ttl=300, backend='memory', exclude={'logger'})
+    async def process(logger: str, user_id: int) -> dict:
+        nonlocal call_count
+        call_count += 1
+        return {'user_id': user_id}
+
+    await process('log1', 123)
+    assert call_count == 1
+    await process('log2', 123)
+    assert call_count == 1
+
+    await process.clear(logger='log1', user_id=123)
+
+    await process('log3', 123)
+    assert call_count == 2
