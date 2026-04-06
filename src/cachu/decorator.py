@@ -9,8 +9,8 @@ from typing import Any
 from .api import NO_VALUE, CacheEntry, CacheInfo, CacheMeta
 from .config import _get_caller_package, get_config, is_disabled
 from .manager import manager
-from .util import make_key_generator, make_partial_pattern, mangle_key
-from .util import validate_entry
+from .util import _is_connection_like, make_key_generator
+from .util import make_partial_pattern, mangle_key, validate_entry
 
 logger = logging.getLogger(__name__)
 
@@ -161,7 +161,8 @@ def cache(
             async_wrapper._cache_key_generator = key_generator
             _attach_helpers(async_wrapper, key_generator, resolved_package,
                             resolved_backend, ttl_for_backend, is_async=True,
-                            original_fn=fn, fn_name=fn_name, tag=tag)
+                            original_fn=fn, fn_name=fn_name, tag=tag,
+                            exclude=exclude)
             return async_wrapper
 
         else:
@@ -212,7 +213,8 @@ def cache(
             sync_wrapper._cache_key_generator = key_generator
             _attach_helpers(sync_wrapper, key_generator, resolved_package,
                             resolved_backend, ttl_for_backend, is_async=False,
-                            original_fn=fn, fn_name=fn_name, tag=tag)
+                            original_fn=fn, fn_name=fn_name, tag=tag,
+                            exclude=exclude)
             return sync_wrapper
 
     return decorator
@@ -276,16 +278,29 @@ def _attach_helpers(
     original_fn: Callable[..., Any],
     fn_name: str = '',
     tag: str = '',
+    exclude: set[str] | None = None,
 ) -> None:
     """Attach helper methods to wrapper (.clear, .refresh, .get, .set, .original).
     """
+    exclude = exclude or frozenset()
     if is_async:
         async def clear(_global: bool = False, **kwargs: Any) -> int:
+            filtered = {
+                k: v for k, v in kwargs.items()
+                if k not in {'self', 'cls'}
+                and not k.startswith('_')
+                and k not in exclude
+                and not _is_connection_like(v)
+            }
+            if kwargs and not filtered:
+                logger.warning(
+                    f'{fn_name}.clear(): all kwargs were excluded from '
+                    f'cache key ({", ".join(kwargs)}); clearing all entries')
             backend = await manager.aget_backend(resolved_package, resolved_backend, ttl)
             cfg = get_config(resolved_package)
             pattern = make_partial_pattern(
                 fn_name, tag, cfg.key_prefix, ttl,
-                global_clear=_global, **kwargs)
+                global_clear=_global, **filtered)
             return await backend.aclear(pattern)
 
         async def refresh(**kwargs: Any) -> Any:
@@ -319,11 +334,22 @@ def _attach_helpers(
         wrapper.original = original
     else:
         def clear(_global: bool = False, **kwargs: Any) -> int:
+            filtered = {
+                k: v for k, v in kwargs.items()
+                if k not in {'self', 'cls'}
+                and not k.startswith('_')
+                and k not in exclude
+                and not _is_connection_like(v)
+            }
+            if kwargs and not filtered:
+                logger.warning(
+                    f'{fn_name}.clear(): all kwargs were excluded from '
+                    f'cache key ({", ".join(kwargs)}); clearing all entries')
             backend = manager.get_backend(resolved_package, resolved_backend, ttl)
             cfg = get_config(resolved_package)
             pattern = make_partial_pattern(
                 fn_name, tag, cfg.key_prefix, ttl,
-                global_clear=_global, **kwargs)
+                global_clear=_global, **filtered)
             return backend.clear(pattern)
 
         def refresh(**kwargs: Any) -> Any:
