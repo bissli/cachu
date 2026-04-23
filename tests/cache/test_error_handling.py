@@ -185,3 +185,30 @@ class TestValidateBehavior:
         assert entry.value == 10
         assert entry.created_at is not None
         assert entry.age >= 0
+
+
+class TestSetFailureResilience:
+    """Tests that backend set() failures don't crash the caller.
+    """
+
+    def test_set_failure_returns_result(self, temp_cache_dir):
+        """Verify unpickleable result is returned even when file backend
+        set() fails.
+        """
+        call_count = 0
+
+        @cachu.cache(ttl=300, backend='file')
+        def returns_lambda() -> object:
+            nonlocal call_count
+            call_count += 1
+            return lambda x: x * 2
+
+        result = returns_lambda()
+        assert callable(result)
+        assert result(5) == 10
+        assert call_count == 1
+
+        result2 = returns_lambda()
+        assert callable(result2)
+        assert result2(5) == 10
+        assert call_count == 2
