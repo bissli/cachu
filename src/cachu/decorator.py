@@ -149,8 +149,13 @@ def cache(
 
                     if cache_if is None or cache_if(result):
                         resolved_ttl = ttl(result) if ttl_is_callable else ttl
-                        await backend_inst.aset(cache_key, result, resolved_ttl)
-                        logger.debug(f'Cached {fn.__name__} with key {cache_key}')
+                        try:
+                            await backend_inst.aset(cache_key, result, resolved_ttl)
+                            logger.debug(f'Cached {fn.__name__} with key {cache_key}')
+                        except Exception:
+                            logger.warning(
+                                f'Cache set failed for {fn.__name__}',
+                                exc_info=True)
 
                     return result
                 finally:
@@ -201,8 +206,13 @@ def cache(
 
                     if cache_if is None or cache_if(result):
                         resolved_ttl = ttl(result) if ttl_is_callable else ttl
-                        backend_inst.set(cache_key, result, resolved_ttl)
-                        logger.debug(f'Cached {fn.__name__} with key {cache_key}')
+                        try:
+                            backend_inst.set(cache_key, result, resolved_ttl)
+                            logger.debug(f'Cached {fn.__name__} with key {cache_key}')
+                        except Exception:
+                            logger.warning(
+                                f'Cache set failed for {fn.__name__}',
+                                exc_info=True)
 
                     return result
                 finally:
