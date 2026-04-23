@@ -2,7 +2,6 @@
 """
 import asyncio
 import fnmatch
-import pickle
 import threading
 import time
 from collections.abc import AsyncIterator, Iterator
@@ -17,7 +16,7 @@ class MemoryBackend(Backend):
     """
 
     def __init__(self) -> None:
-        self._cache: dict[str, tuple[bytes, float, float]] = {}
+        self._cache: dict[str, tuple[Any, float, float]] = {}
         self._stats: dict[str, tuple[int, int]] = {}
         self._sync_lock = threading.RLock()
         self._async_lock = asyncio.Lock()
@@ -26,31 +25,23 @@ class MemoryBackend(Backend):
 
     def _do_get(self, key: str) -> tuple[Any, float | None]:
         """Get value and metadata without locking.
-
-        Handles corrupted cache data gracefully by treating deserialization
-        errors as cache misses (per dogpile.cache behavior).
         """
         entry = self._cache.get(key)
         if entry is None:
             return NO_VALUE, None
 
-        pickled_value, created_at, expires_at = entry
+        value, created_at, expires_at = entry
         if time.time() > expires_at:
             del self._cache[key]
             return NO_VALUE, None
 
-        try:
-            return pickle.loads(pickled_value), created_at
-        except (pickle.UnpicklingError, EOFError, TypeError, AttributeError, ModuleNotFoundError):
-            del self._cache[key]
-            return NO_VALUE, None
+        return value, created_at
 
     def _do_set(self, key: str, value: Any, ttl: int) -> None:
         """Set value without locking.
         """
         now = time.time()
-        pickled_value = pickle.dumps(value)
-        self._cache[key] = (pickled_value, now, now + ttl)
+        self._cache[key] = (value, now, now + ttl)
 
     def _do_delete(self, key: str) -> None:
         """Delete value without locking.

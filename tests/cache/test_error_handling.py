@@ -4,33 +4,47 @@ import cachu
 import pytest
 
 
-class TestUnpickleableObjects:
-    """Tests for handling objects that cannot be pickled.
+class TestArbitraryObjects:
+    """Tests for caching arbitrary Python objects in the memory backend.
     """
 
-    def test_unpickleable_return_value_raises(self):
-        """Verify unpickleable return values raise PicklingError.
-
-        Objects like lambdas cannot be pickled. The cache decorator will
-        raise an exception when trying to cache such values.
+    def test_arbitrary_objects_cacheable_in_memory(self):
+        """Verify any Python object can be cached with the memory backend.
         """
+        call_count = 0
+
         @cachu.cache(ttl=300, backend='memory')
         def returns_lambda() -> object:
-            return lambda x: x * 2
-
-        with pytest.raises(Exception):
-            returns_lambda()
-
-    def test_unpickleable_with_cache_if_false_succeeds(self):
-        """Verify unpickleable values work when cache_if returns False.
-        """
-        @cachu.cache(ttl=300, backend='memory', cache_if=lambda r: False)
-        def returns_lambda() -> object:
+            nonlocal call_count
+            call_count += 1
             return lambda x: x * 2
 
         result = returns_lambda()
         assert callable(result)
         assert result(5) == 10
+        assert call_count == 1
+
+        result2 = returns_lambda()
+        assert result2(5) == 10
+        assert call_count == 1
+
+    def test_cache_if_false_returns_uncached_result(self):
+        """Verify cache_if=False returns the value without caching it.
+        """
+        call_count = 0
+
+        @cachu.cache(ttl=300, backend='memory', cache_if=lambda r: False)
+        def returns_lambda() -> object:
+            nonlocal call_count
+            call_count += 1
+            return lambda x: x * 2
+
+        result = returns_lambda()
+        assert callable(result)
+        assert result(5) == 10
+
+        returns_lambda()
+        assert call_count == 2
 
 
 class TestCacheIfExceptions:
@@ -171,78 +185,3 @@ class TestValidateBehavior:
         assert entry.value == 10
         assert entry.created_at is not None
         assert entry.age >= 0
-
-
-class TestCacheCorruption:
-    """Tests for graceful handling of corrupted cache data.
-    """
-
-    def test_corrupt_cache_data_causes_recomputation(self):
-        """Verify corrupted cache data triggers recomputation (graceful degradation).
-
-        Per dogpile.cache behavior: deserialization errors are caught and
-        treated as cache miss, causing silent recomputation. This enables
-        graceful degradation during version upgrades where serialized objects
-        may have changed.
-
-        NOTE: Accesses internal backend._cache to inject corruption - no public
-        API exists for this scenario.
-        """
-        import time
-
-        from cachu.manager import manager
-
-        call_count = 0
-
-        @cachu.cache(ttl=300, backend='memory')
-        def compute(x: int) -> int:
-            nonlocal call_count
-            call_count += 1
-            return x * 2
-
-        compute(5)
-        assert call_count == 1
-
-        meta = compute._cache_meta
-        backend = manager.get_backend(meta.package, meta.backend, meta.ttl)
-
-        for key in list(backend._cache.keys()):
-            now = time.time()
-            backend._cache[key] = (b'invalid pickle data', now, now + 300)
-
-        result = compute(5)
-        assert call_count == 2, 'Corruption should trigger recomputation'
-        assert result == 10
-
-    def test_corrupted_entry_does_not_affect_other_keys(self):
-        """Verify corruption of one entry doesn't affect others.
-
-        Different cache keys should be independent. Corruption in one
-        key's data should not prevent access to other uncorrupted keys.
-        """
-        import time
-
-        from cachu.manager import manager
-
-        @cachu.cache(ttl=300, backend='memory')
-        def compute(x: int) -> int:
-            return x * 2
-
-        compute(5)
-        compute(10)
-
-        meta = compute._cache_meta
-        backend = manager.get_backend(meta.package, meta.backend, meta.ttl)
-
-        corrupted_key = None
-        for key in list(backend._cache.keys()):
-            if 'x=5' in key:
-                now = time.time()
-                backend._cache[key] = (b'invalid pickle data', now, now + 300)
-                corrupted_key = key
-                break
-
-        assert corrupted_key is not None
-
-        result = compute(10)
-        assert result == 20
