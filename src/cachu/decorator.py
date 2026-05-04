@@ -254,6 +254,73 @@ def get_cache_info(fn: Callable[..., Any]) -> CacheInfo:
     return CacheInfo(hits=hits, misses=misses, currsize=currsize)
 
 
+_CURRSIZE_FRESH_TTL = 60
+_CURRSIZE_LOCK_TTL = 30
+_CURRSIZE_FRESH_PREFIX = 'cachu:_currsize:'
+_CURRSIZE_LAST_PREFIX = 'cachu:_currsize_last:'
+_CURRSIZE_LOCK_PREFIX = 'cachu:_currsize_lock:'
+
+
+def _currsize_keys(package: str | None, fn_name: str) -> tuple[str, str, str]:
+    """Build the (fresh, last, lock) Redis keys for a (package, fn_name) pair.
+    """
+    suffix = f'{package or "_"}:{fn_name}'
+    return (
+        f'{_CURRSIZE_FRESH_PREFIX}{suffix}',
+        f'{_CURRSIZE_LAST_PREFIX}{suffix}',
+        f'{_CURRSIZE_LOCK_PREFIX}{suffix}',
+        )
+
+
+async def _refresh_currsize_async(
+    backend: Any,
+    fresh_key: str,
+    last_key: str,
+    lock_key: str,
+    pattern: str,
+) -> None:
+    """Recompute currsize via the slow scan and refresh both the fresh and last-known keys.
+    """
+    try:
+        count = await backend.acount(pattern)
+        client = backend._get_async_client()
+        await client.set(fresh_key, count, ex=_CURRSIZE_FRESH_TTL)
+        await client.set(last_key, count)
+    except Exception:
+        logger.exception('currsize refresh failed')
+    finally:
+        try:
+            await backend._get_async_client().delete(lock_key)
+        except Exception:
+            pass
+
+
+async def _get_cached_currsize_async(
+    backend: Any,
+    package: str | None,
+    fn_name: str,
+    pattern: str,
+) -> int:
+    """Stale-while-revalidate currsize for a Redis-backed function.
+
+    Returns a fresh value if available; otherwise returns the last-known value
+    (or 0 on cold start) and schedules a background refresh.
+    """
+    fresh_key, last_key, lock_key = _currsize_keys(package, fn_name)
+    client = backend._get_async_client()
+    fresh = await client.get(fresh_key)
+    if fresh is not None:
+        return int(fresh)
+
+    last = await client.get(last_key)
+    got_lock = await client.set(lock_key, b'1', nx=True, ex=_CURRSIZE_LOCK_TTL)
+    if got_lock:
+        asyncio.create_task(_refresh_currsize_async(
+            backend, fresh_key, last_key, lock_key, pattern))
+
+    return int(last) if last is not None else 0
+
+
 async def get_async_cache_info(fn: Callable[..., Any]) -> CacheInfo:
     """Get cache statistics for an async decorated function.
 
@@ -273,7 +340,13 @@ async def get_async_cache_info(fn: Callable[..., Any]) -> CacheInfo:
 
     cfg = get_config(meta.package)
     pattern = f'*:{cfg.key_prefix}{fn_name}|*'
-    currsize = await backend_instance.acount(pattern)
+
+    from .backends.redis import RedisBackend
+    if isinstance(backend_instance, RedisBackend):
+        currsize = await _get_cached_currsize_async(
+            backend_instance, meta.package, fn_name, pattern)
+    else:
+        currsize = await backend_instance.acount(pattern)
 
     return CacheInfo(hits=hits, misses=misses, currsize=currsize)
 

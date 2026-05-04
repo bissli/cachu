@@ -217,7 +217,12 @@ class RedisBackend(Backend):
 
     def count(self, pattern: str | None = None) -> int:
         """Count keys matching pattern.
+
+        Whole-keyspace counts (pattern is None or '*') use DBSIZE for O(1).
+        A specific pattern still requires a SCAN.
         """
+        if pattern is None or pattern == '*':
+            return self.client.dbsize()
         return sum(1 for _ in self.keys(pattern))
 
     def get_mutex(self, key: str) -> CacheMutex:
@@ -312,7 +317,12 @@ class RedisBackend(Backend):
 
     async def acount(self, pattern: str | None = None) -> int:
         """Async count keys matching pattern.
+
+        Whole-keyspace counts (pattern is None or '*') use DBSIZE for O(1).
+        A specific pattern still requires a SCAN.
         """
+        if pattern is None or pattern == '*':
+            return await self._get_async_client().dbsize()
         count = 0
         async for _ in self.akeys(pattern):
             count += 1
