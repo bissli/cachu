@@ -50,7 +50,7 @@ def make_key_generator(
     fn: Callable[..., Any],
     tag: str = '',
     exclude: set[str] | None = None,
-) -> Callable[..., str]:
+) -> Callable[..., tuple[str, dict[str, Any]]]:
     """Create a key generator function for the given function.
 
     The generated keys include:
@@ -64,7 +64,10 @@ def make_key_generator(
         exclude: Parameter names to exclude from the key
 
     Returns
-        A function that generates cache keys from arguments
+        A function that generates (cache_key, filtered_args_dict) tuples from
+        arguments. The filtered dict applies the same filtering rules used to
+        build the key, so predicates that consume it see exactly the args that
+        contribute to the key.
     """
     exclude = exclude or set()
     unwrapped_fn = getattr(fn, '__wrapped__', fn)
@@ -80,8 +83,8 @@ def make_key_generator(
     defaults_reversed = list(reversed(argspec.defaults or []))
     args_with_defaults = {args_reversed[i]: default for i, default in enumerate(defaults_reversed)}
 
-    def generate_key(*args: Any, **kwargs: Any) -> str:
-        """Generate a cache key from function arguments.
+    def generate_key(*args: Any, **kwargs: Any) -> tuple[str, dict[str, Any]]:
+        """Generate a (cache_key, filtered_args) tuple from function arguments.
         """
         positional_args = args[:len(argspec.args)]
         varargs = args[len(argspec.args):]
@@ -100,9 +103,64 @@ def make_key_generator(
         }
 
         params_str = ' '.join(f'{k}={repr(v)}' for k, v in sorted(filtered.items()))
-        return f'{key_prefix}|{params_str}'
+        return f'{key_prefix}|{params_str}', filtered
 
     return generate_key
+
+
+def _predicate_arity(fn: Callable[..., Any]) -> int:
+    """Return 1 or 2: how many positional args the predicate expects.
+
+    Predicates may be passed in either legacy 1-arg form (receives the result
+    or CacheEntry only) or new 2-arg form (also receives the filtered args
+    dict). Detection is done once at decoration time by inspecting the
+    callable's signature.
+
+    Rules:
+    - Count positional-acceptable params (POSITIONAL_ONLY,
+      POSITIONAL_OR_KEYWORD) regardless of default. Defaults are common when
+      users write `def f(result, args=None)` to opt into the 2-arg form
+      gracefully.
+    - A *args parameter accepts any number of positionals, treat as 2-arg.
+    - 0 positionals raises TypeError at decoration.
+    - >2 required positionals and no *args raises TypeError at decoration.
+    - inspect.signature() failure (builtins, C extensions) falls back to
+      legacy 1-arg.
+    """
+    try:
+        sig = inspect.signature(fn)
+    except (TypeError, ValueError):
+        return 1
+
+    positional_kinds = (
+        inspect.Parameter.POSITIONAL_ONLY,
+        inspect.Parameter.POSITIONAL_OR_KEYWORD,
+    )
+    positionals = [p for p in sig.parameters.values() if p.kind in positional_kinds]
+    has_var_positional = any(
+        p.kind == inspect.Parameter.VAR_POSITIONAL
+        for p in sig.parameters.values()
+    )
+
+    if has_var_positional:
+        return 2
+
+    required = [p for p in positionals if p.default is p.empty]
+    name = getattr(fn, '__name__', repr(fn))
+
+    if not positionals:
+        raise TypeError(
+            f'cachu predicate {name!r} takes 0 positional args; '
+            f'expected (result) or (result, args)'
+        )
+    if len(required) > 2:
+        raise TypeError(
+            f'cachu predicate {name!r} takes {len(required)} required args; '
+            f'expected (result) or (result, args)'
+        )
+    if len(positionals) >= 2:
+        return 2
+    return 1
 
 
 def mangle_key(key: str, key_prefix: str, ttl: int) -> str:
@@ -174,9 +232,15 @@ def make_partial_pattern(
 def validate_entry(
     value: Any,
     created_at: float | None,
-    validate: Callable[[CacheEntry], bool] | None,
+    validate: Callable[..., bool] | None,
+    args_dict: dict[str, Any] | None = None,
+    validate_arity: int = 1,
 ) -> bool:
     """Validate a cached entry using the validate callback.
+
+    The validate callable is called with (entry) when validate_arity is 1
+    (legacy) or with (entry, args_dict) when validate_arity is 2. args_dict
+    holds the same filtered args that generate_key produced for this call.
     """
     if validate is None or created_at is None:
         return True
@@ -186,4 +250,6 @@ def validate_entry(
         created_at=created_at,
         age=time.time() - created_at,
     )
+    if validate_arity == 2:
+        return validate(entry, args_dict or {})
     return validate(entry)

@@ -229,9 +229,35 @@ def get_data(id: int) -> dict:
     return fetch(id)
 ```
 
+#### Args-aware TTL
+
+`ttl` callables can also accept a second positional parameter and receive
+the filtered args dict — useful when freshness depends on the request
+shape, not the result. The args dict is the same view used to build the
+cache key (with `self`/`cls`/`_`-prefixed/`exclude=`d/connection-like
+values dropped):
+
+```python
+import datetime
+
+# Short TTL for today, long TTL for past dates
+@cache(ttl=lambda result, args: 900 if args['date'] == datetime.date.today() else 86400)
+def get_filings(date: datetime.date) -> list:
+    return fetch_filings(date)
+```
+
+Arity is detected once at decoration time via `inspect.signature`. A
+predicate written as `def f(result, args=None)` is treated as 2-arg, so
+you can opt in without changing call sites. A predicate with 0 or >2
+required positional params raises `TypeError` at decoration.
+
 ### Conditional Caching
 
-Cache results only when a condition is met:
+Cache results only when a condition is met. `cache_if` runs after the
+function call; returning `False` bypasses the write but does not affect
+the read. **Concurrent callers that all hit a `cache_if=False` path will
+each re-fetch** — the per-key mutex protects the read/write race, not
+the predicate decision.
 
 ```python
 # Don't cache None results
@@ -243,6 +269,25 @@ def find_user(email: str) -> dict | None:
 @cache(ttl=300, cache_if=lambda result: len(result) > 0)
 def search(query: str) -> list:
     return db.search(query)
+```
+
+#### Args-aware cache_if
+
+`cache_if` accepts the same 2-arg overload as `ttl`. The args dict lets
+you gate caching on the call shape, not just the result — for example,
+suppress caching of empty results only for "today's" date while keeping
+the empty cache for historical dates (where empty is usually the final
+answer):
+
+```python
+import datetime
+
+@cache(
+    ttl=300,
+    cache_if=lambda result, args: bool(result) or args['date'] != datetime.date.today(),
+)
+def get_filings(date: datetime.date) -> list:
+    return fetch_filings(date)
 ```
 
 ### Validation Callbacks
@@ -268,6 +313,49 @@ The `entry` parameter is a `CacheEntry` with:
 - `value`: The cached value
 - `created_at`: Unix timestamp when cached
 - `age`: Seconds since creation
+
+`validate` also accepts a 2-arg `validate(entry, args)` form when you
+need the call shape to influence the staleness decision (e.g. require a
+shorter age window for today vs historical dates).
+
+### Presets
+
+`cachu.presets` ships ready-made predicate bundles for common
+args-aware patterns. Each preset returns a dict of decorator kwargs to
+splat into `@cache(...)`.
+
+#### today_aware
+
+For date-keyed fetches where "today" is volatile (more data arrives
+throughout the day) but past dates are immutable. Short TTL for today,
+long TTL for past dates, and (by default) empty results for today are
+not cached so a transient empty does not pin the cache. Empty results
+for past dates ARE cached, since historical empties are typically final.
+
+```python
+import datetime
+from cachu import cache, presets
+
+@cache(
+    tag='filings',
+    **presets.today_aware(
+        date_param='date',
+        today_ttl=900,      # 15 min
+        past_ttl=86400,     # 24 h
+    ),
+)
+def get_filings(date: datetime.date) -> list:
+    return fetch_filings(date)
+```
+
+`today_ttl` and `past_ttl` are required so each call site makes a
+deliberate freshness decision. Optional knobs: `skip_empty_today=True`
+(default), `skip_empty_past=False` (default), `today_fn=datetime.date.today`
+(injectable for tests).
+
+The preset raises `KeyError` with a clear message if `date_param` is
+not found in the args dict — usually a sign that the parameter was
+renamed or removed by `exclude=`.
 
 ### Per-Call Control
 
@@ -568,10 +656,12 @@ from cachu import (
 
 - **Multiple backends**: Memory, file (SQLite), Redis, and null (passthrough)
 - **Async support**: Full async/await API with `@async_cache` decorator
-- **Flexible TTL**: Static or dynamic TTL (callable that receives result)
+- **Flexible TTL**: Static or dynamic TTL (callable that receives result, optionally with call args)
 - **Tags**: Organize and selectively clear cache entries
 - **Package isolation**: Each package gets isolated configuration
-- **Conditional caching**: Cache based on result value
+- **Conditional caching**: Cache based on result value and/or call args
+- **Args-aware predicates**: `ttl`, `cache_if`, and `validate` accept a 2-arg `(value, args)` form
+- **Presets**: Composable bundles for common patterns (e.g. `today_aware` for date-keyed fetches)
 - **Validation callbacks**: Validate entries before returning
 - **Per-call control**: Skip or overwrite cache per call
 - **Helper methods**: `.get()`, `.set()`, `.clear()`, `.refresh()`, `.original()` on decorated functions

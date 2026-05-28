@@ -2,6 +2,7 @@
 """
 __version__ = '0.3.8'
 
+from . import presets
 from .api import Backend, CacheEntry, CacheInfo, CacheMeta
 from .backends.redis import get_redis_client
 from .config import configure, disable, enable, get_all_configs, get_config
@@ -42,4 +43,5 @@ __all__ = [
     'get_config',
     'get_redis_client',
     'is_disabled',
+    'presets',
 ]

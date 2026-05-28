@@ -43,7 +43,7 @@ def cache_get(fn: Callable[..., Any], default: Any = _MISSING, **kwargs: Any) ->
     cfg = get_config(meta.package)
 
     key_generator = fn._cache_key_generator
-    base_key = key_generator(**kwargs)
+    base_key, _ = key_generator(**kwargs)
     cache_key = mangle_key(base_key, cfg.key_prefix, meta.ttl)
 
     backend = manager.get_backend(meta.package, meta.backend, meta.ttl)
@@ -72,7 +72,7 @@ def cache_set(fn: Callable[..., Any], value: Any, **kwargs: Any) -> None:
     cfg = get_config(meta.package)
 
     key_generator = fn._cache_key_generator
-    base_key = key_generator(**kwargs)
+    base_key, _ = key_generator(**kwargs)
     cache_key = mangle_key(base_key, cfg.key_prefix, meta.ttl)
 
     backend = manager.get_backend(meta.package, meta.backend, meta.ttl)
@@ -95,7 +95,7 @@ def cache_delete(fn: Callable[..., Any], **kwargs: Any) -> None:
     cfg = get_config(meta.package)
 
     key_generator = fn._cache_key_generator
-    base_key = key_generator(**kwargs)
+    base_key, _ = key_generator(**kwargs)
     cache_key = mangle_key(base_key, cfg.key_prefix, meta.ttl)
 
     backend = manager.get_backend(meta.package, meta.backend, meta.ttl)
@@ -204,7 +204,7 @@ async def async_cache_get(
     cfg = get_config(meta.package)
 
     key_generator = fn._cache_key_generator
-    base_key = key_generator(**kwargs)
+    base_key, _ = key_generator(**kwargs)
     cache_key = mangle_key(base_key, cfg.key_prefix, meta.ttl)
 
     backend = await manager.aget_backend(meta.package, meta.backend, meta.ttl)
@@ -233,7 +233,7 @@ async def async_cache_set(fn: Callable[..., Any], value: Any, **kwargs: Any) -> 
     cfg = get_config(meta.package)
 
     key_generator = fn._cache_key_generator
-    base_key = key_generator(**kwargs)
+    base_key, _ = key_generator(**kwargs)
     cache_key = mangle_key(base_key, cfg.key_prefix, meta.ttl)
 
     backend = await manager.aget_backend(meta.package, meta.backend, meta.ttl)
@@ -256,7 +256,7 @@ async def async_cache_delete(fn: Callable[..., Any], **kwargs: Any) -> None:
     cfg = get_config(meta.package)
 
     key_generator = fn._cache_key_generator
-    base_key = key_generator(**kwargs)
+    base_key, _ = key_generator(**kwargs)
     cache_key = mangle_key(base_key, cfg.key_prefix, meta.ttl)
 
     backend = await manager.aget_backend(meta.package, meta.backend, meta.ttl)

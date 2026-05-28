@@ -6,10 +6,10 @@ from collections.abc import Callable
 from functools import wraps
 from typing import Any
 
-from .api import NO_VALUE, CacheEntry, CacheInfo, CacheMeta
+from .api import NO_VALUE, CacheInfo, CacheMeta
 from .config import _get_caller_package, get_config, is_disabled
 from .manager import manager
-from .util import _is_connection_like, make_key_generator
+from .util import _is_connection_like, _predicate_arity, make_key_generator
 from .util import make_partial_pattern, mangle_key, validate_entry
 
 logger = logging.getLogger(__name__)
@@ -18,12 +18,12 @@ _MISSING = object()
 
 
 def cache(
-    ttl: int | Callable[[Any], int] = 300,
+    ttl: int | Callable[..., int] = 300,
     backend: str | None = None,
     tag: str = '',
     exclude: set[str] | None = None,
-    cache_if: Callable[[Any], bool] | None = None,
-    validate: Callable[[CacheEntry], bool] | None = None,
+    cache_if: Callable[..., bool] | None = None,
+    validate: Callable[..., bool] | None = None,
     package: str | None = None,
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     """Universal cache decorator for sync and async functions.
@@ -32,15 +32,21 @@ def cache(
     Includes dogpile prevention using per-key mutexes.
 
     Args:
-        ttl: Time-to-live in seconds (default: 300). Can be a callable that
-             receives the result and returns the TTL (for dynamic expiration).
+        ttl: Time-to-live in seconds (default: 300). Can also be a callable.
+             Legacy form `ttl(result)` receives the function result and returns
+             a TTL. Two-arg form `ttl(result, args)` additionally receives the
+             filtered args dict (same view used for the cache key, with
+             self/cls/_-prefixed/excluded/connection-like values dropped).
         backend: Backend type ('memory', 'file', 'redis'). Uses config default if None.
         tag: Tag for grouping related cache entries
         exclude: Parameter names to exclude from cache key
-        cache_if: Function to determine if result should be cached.
-                  Called with result value, caches if returns True.
-        validate: Function to validate cached entries before returning.
-                  Called with CacheEntry, returns False to recompute.
+        cache_if: Predicate that decides whether a fresh result should be
+                  written to the cache. Legacy form `cache_if(result)` or
+                  two-arg form `cache_if(result, args)`. Returning False
+                  bypasses the write; concurrent callers will each re-fetch.
+        validate: Predicate that decides whether a cached entry is still
+                  usable on hit. Legacy form `validate(entry)` or two-arg
+                  form `validate(entry, args)`. Return False to recompute.
         package: Package name for config isolation. Auto-detected from the
                  calling module's top-level package if None. Use explicit
                  values when code may be vendored or bundled into other
@@ -64,6 +70,15 @@ def cache(
         def get_config(key: str) -> dict:
             return fetch_config(key)
 
+        # Args-aware TTL: short for today, long for past
+        import datetime
+        @cache(ttl=lambda result, args: 900 if args['date'] == datetime.date.today() else 86400)
+        def get_filings(date): ...
+
+        # Args-aware cache_if: skip empty for today, cache empty for past
+        @cache(cache_if=lambda result, args: bool(result) or args['date'] != datetime.date.today())
+        def get_filings(date): ...
+
         # Normal call
         user = get_user(123)
 
@@ -81,6 +96,9 @@ def cache(
     """
     ttl_is_callable = callable(ttl)
     ttl_for_backend = -1 if ttl_is_callable else ttl
+    ttl_arity = _predicate_arity(ttl) if ttl_is_callable else 0
+    cache_if_arity = _predicate_arity(cache_if) if cache_if is not None else 0
+    validate_arity = _predicate_arity(validate) if validate is not None else 0
 
     resolved_package = package if package is not None else _get_caller_package()
 
@@ -125,13 +143,14 @@ def cache(
                 )
                 cfg = get_config(resolved_package)
 
-                base_key = key_generator(*args, **kwargs)
+                base_key, args_dict = key_generator(*args, **kwargs)
                 cache_key = mangle_key(base_key, cfg.key_prefix, ttl_for_backend)
 
                 if not overwrite_cache:
                     value, created_at = await backend_inst.aget_with_metadata(cache_key)
 
-                    if value is not NO_VALUE and validate_entry(value, created_at, validate):
+                    if value is not NO_VALUE and validate_entry(
+                            value, created_at, validate, args_dict, validate_arity):
                         await backend_inst.aincr_stat(fn.__name__, 'hits')
                         return value
 
@@ -140,15 +159,28 @@ def cache(
                 try:
                     if not overwrite_cache:
                         value, created_at = await backend_inst.aget_with_metadata(cache_key)
-                        if value is not NO_VALUE and validate_entry(value, created_at, validate):
+                        if value is not NO_VALUE and validate_entry(
+                                value, created_at, validate, args_dict, validate_arity):
                             await backend_inst.aincr_stat(fn.__name__, 'hits')
                             return value
 
                     await backend_inst.aincr_stat(fn.__name__, 'misses')
                     result = await fn(*args, **kwargs)
 
-                    if cache_if is None or cache_if(result):
-                        resolved_ttl = ttl(result) if ttl_is_callable else ttl
+                    if cache_if is None:
+                        should_cache = True
+                    elif cache_if_arity == 2:
+                        should_cache = cache_if(result, args_dict)
+                    else:
+                        should_cache = cache_if(result)
+
+                    if should_cache:
+                        if not ttl_is_callable:
+                            resolved_ttl = ttl
+                        elif ttl_arity == 2:
+                            resolved_ttl = ttl(result, args_dict)
+                        else:
+                            resolved_ttl = ttl(result)
                         try:
                             await backend_inst.aset(cache_key, result, resolved_ttl)
                             logger.debug(f'Cached {fn.__name__} with key {cache_key}')
@@ -182,13 +214,14 @@ def cache(
                 backend_inst = manager.get_backend(resolved_package, resolved_backend, ttl_for_backend)
                 cfg = get_config(resolved_package)
 
-                base_key = key_generator(*args, **kwargs)
+                base_key, args_dict = key_generator(*args, **kwargs)
                 cache_key = mangle_key(base_key, cfg.key_prefix, ttl_for_backend)
 
                 if not overwrite_cache:
                     value, created_at = backend_inst.get_with_metadata(cache_key)
 
-                    if value is not NO_VALUE and validate_entry(value, created_at, validate):
+                    if value is not NO_VALUE and validate_entry(
+                            value, created_at, validate, args_dict, validate_arity):
                         backend_inst.incr_stat(fn.__name__, 'hits')
                         return value
 
@@ -197,15 +230,28 @@ def cache(
                 try:
                     if not overwrite_cache:
                         value, created_at = backend_inst.get_with_metadata(cache_key)
-                        if value is not NO_VALUE and validate_entry(value, created_at, validate):
+                        if value is not NO_VALUE and validate_entry(
+                                value, created_at, validate, args_dict, validate_arity):
                             backend_inst.incr_stat(fn.__name__, 'hits')
                             return value
 
                     backend_inst.incr_stat(fn.__name__, 'misses')
                     result = fn(*args, **kwargs)
 
-                    if cache_if is None or cache_if(result):
-                        resolved_ttl = ttl(result) if ttl_is_callable else ttl
+                    if cache_if is None:
+                        should_cache = True
+                    elif cache_if_arity == 2:
+                        should_cache = cache_if(result, args_dict)
+                    else:
+                        should_cache = cache_if(result)
+
+                    if should_cache:
+                        if not ttl_is_callable:
+                            resolved_ttl = ttl
+                        elif ttl_arity == 2:
+                            resolved_ttl = ttl(result, args_dict)
+                        else:
+                            resolved_ttl = ttl(result)
                         try:
                             backend_inst.set(cache_key, result, resolved_ttl)
                             logger.debug(f'Cached {fn.__name__} with key {cache_key}')
@@ -393,7 +439,8 @@ def _attach_helpers(
         async def get(default: Any = _MISSING, **kwargs: Any) -> Any:
             backend = await manager.aget_backend(resolved_package, resolved_backend, ttl)
             cfg = get_config(resolved_package)
-            cache_key = mangle_key(key_generator(**kwargs), cfg.key_prefix, ttl)
+            base_key, _ = key_generator(**kwargs)
+            cache_key = mangle_key(base_key, cfg.key_prefix, ttl)
             value = await backend.aget(cache_key)
             if value is NO_VALUE:
                 if default is _MISSING:
@@ -404,7 +451,8 @@ def _attach_helpers(
         async def set(value: Any, **kwargs: Any) -> None:
             backend = await manager.aget_backend(resolved_package, resolved_backend, ttl)
             cfg = get_config(resolved_package)
-            cache_key = mangle_key(key_generator(**kwargs), cfg.key_prefix, ttl)
+            base_key, _ = key_generator(**kwargs)
+            cache_key = mangle_key(base_key, cfg.key_prefix, ttl)
             await backend.aset(cache_key, value, ttl)
 
         async def original(*args: Any, **kwargs: Any) -> Any:
@@ -442,7 +490,8 @@ def _attach_helpers(
         def get(default: Any = _MISSING, **kwargs: Any) -> Any:
             backend = manager.get_backend(resolved_package, resolved_backend, ttl)
             cfg = get_config(resolved_package)
-            cache_key = mangle_key(key_generator(**kwargs), cfg.key_prefix, ttl)
+            base_key, _ = key_generator(**kwargs)
+            cache_key = mangle_key(base_key, cfg.key_prefix, ttl)
             value = backend.get(cache_key)
             if value is NO_VALUE:
                 if default is _MISSING:
@@ -453,7 +502,8 @@ def _attach_helpers(
         def set(value: Any, **kwargs: Any) -> None:
             backend = manager.get_backend(resolved_package, resolved_backend, ttl)
             cfg = get_config(resolved_package)
-            cache_key = mangle_key(key_generator(**kwargs), cfg.key_prefix, ttl)
+            base_key, _ = key_generator(**kwargs)
+            cache_key = mangle_key(base_key, cfg.key_prefix, ttl)
             backend.set(cache_key, value, ttl)
 
         def original(*args: Any, **kwargs: Any) -> Any:
