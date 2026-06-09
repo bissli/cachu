@@ -91,7 +91,7 @@ def make_key_generator(
 
         as_kwargs = dict(**args_with_defaults)
         as_kwargs.update(dict(zip(argspec.args, positional_args)))
-        as_kwargs.update({f'vararg{i+1}': varg for i, varg in enumerate(varargs)})
+        as_kwargs.update({f'vararg{i + 1}': varg for i, varg in enumerate(varargs)})
         as_kwargs.update(**kwargs)
 
         filtered = {

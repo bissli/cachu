@@ -28,6 +28,13 @@ Repository = "https://github.com/bissli/cachu.git"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.ruff]
+line-length = 119
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]

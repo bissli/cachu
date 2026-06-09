@@ -346,7 +346,6 @@ class TestTodayAwarePreset:
         """Verify the preset selects today_ttl when date matches today.
         """
         fixed_today = datetime.date(2026, 5, 28)
-        seen = []
 
         def fake_today():
             return fixed_today

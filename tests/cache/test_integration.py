@@ -182,7 +182,7 @@ def test_cache_if_callback():
         return None
 
     result1 = find_item(1)
-    result2 = find_item(1)
+    find_item(1)
     assert result1 == {'id': 1}
     assert call_count == 1
 
@@ -228,16 +228,16 @@ def test_skip_cache_kwarg():
         call_count += 1
         return x * 2
 
-    result1 = func(5)
+    func(5)
     assert call_count == 1
 
-    result2 = func(5)
+    func(5)
     assert call_count == 1
 
-    result3 = func(5, _skip_cache=True)
+    func(5, _skip_cache=True)
     assert call_count == 2
 
-    result4 = func(5)
+    func(5)
     assert call_count == 2
 
 

@@ -347,20 +347,20 @@ class TestCacheDelete:
             call_count += 1
             return {'id': user_id, 'name': f'user_{user_id}'}
 
-        result1 = get_user(123)
-        result2 = get_user(456)
+        get_user(123)
+        get_user(456)
         assert call_count == 2
 
-        result3 = get_user(123)
-        result4 = get_user(456)
+        get_user(123)
+        get_user(456)
         assert call_count == 2
 
         cachu.cache_delete(get_user, user_id=123)
 
-        result5 = get_user(123)
+        get_user(123)
         assert call_count == 3
 
-        result6 = get_user(456)
+        get_user(456)
         assert call_count == 3
 
     def test_with_multiple_params(self):
