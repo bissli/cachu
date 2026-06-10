@@ -28,7 +28,7 @@ class CacheEntry:
 
 @dataclass
 class CacheInfo:
-    """Cache statistics for a decorated function.
+    """Cache statistics for a decorated function (Redis currsize is approximate).
     """
     hits: int
     misses: int

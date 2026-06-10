@@ -7,7 +7,7 @@ from functools import wraps
 from typing import Any
 
 from .api import NO_VALUE, CacheInfo, CacheMeta
-from .config import _get_caller_package, get_config, is_disabled
+from .config import VALID_BACKENDS, _get_caller_package, get_config, is_disabled
 from .manager import manager
 from .util import _is_connection_like, _predicate_arity, make_key_generator
 from .util import make_partial_pattern, mangle_key, validate_entry
@@ -15,6 +15,58 @@ from .util import make_partial_pattern, mangle_key, validate_entry
 logger = logging.getLogger(__name__)
 
 _MISSING = object()
+
+
+async def _safe_aget(
+    backend_inst: Any,
+    cache_key: str,
+    fail_open: bool,
+    fn_name: str,
+) -> tuple[Any, float | None]:
+    """Read from the backend, degrading a backend error to a miss when fail_open.
+    """
+    try:
+        return await backend_inst.aget_with_metadata(cache_key)
+    except Exception:
+        if not fail_open:
+            raise
+        logger.warning(f'Cache read failed for {fn_name!r}; treating as miss', exc_info=True)
+        return NO_VALUE, None
+
+
+def _safe_get(
+    backend_inst: Any,
+    cache_key: str,
+    fail_open: bool,
+    fn_name: str,
+) -> tuple[Any, float | None]:
+    """Read from the backend, degrading a backend error to a miss when fail_open.
+    """
+    try:
+        return backend_inst.get_with_metadata(cache_key)
+    except Exception:
+        if not fail_open:
+            raise
+        logger.warning(f'Cache read failed for {fn_name!r}; treating as miss', exc_info=True)
+        return NO_VALUE, None
+
+
+async def _safe_aincr_stat(backend_inst: Any, fn_name: str, stat: str) -> None:
+    """Increment a stat counter; errors are swallowed (stats are best-effort).
+    """
+    try:
+        await backend_inst.aincr_stat(fn_name, stat)
+    except Exception:
+        logger.warning(f'Cache stat update failed for {fn_name!r}', exc_info=True)
+
+
+def _safe_incr_stat(backend_inst: Any, fn_name: str, stat: str) -> None:
+    """Increment a stat counter; errors are swallowed (stats are best-effort).
+    """
+    try:
+        backend_inst.incr_stat(fn_name, stat)
+    except Exception:
+        logger.warning(f'Cache stat update failed for {fn_name!r}', exc_info=True)
 
 
 def cache(
@@ -106,6 +158,8 @@ def cache(
         cfg = get_config(resolved_package)
         resolved_backend = cfg.backend_default
     else:
+        if backend not in VALID_BACKENDS:
+            raise ValueError(f'backend must be one of {VALID_BACKENDS}, got {backend!r}')
         resolved_backend = backend
 
     def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
@@ -145,26 +199,37 @@ def cache(
 
                 base_key, args_dict = key_generator(*args, **kwargs)
                 cache_key = mangle_key(base_key, cfg.key_prefix, ttl_for_backend)
+                fail_open = cfg.fail_open
 
                 if not overwrite_cache:
-                    value, created_at = await backend_inst.aget_with_metadata(cache_key)
+                    value, created_at = await _safe_aget(
+                        backend_inst, cache_key, fail_open, fn.__name__)
 
                     if value is not NO_VALUE and validate_entry(
                             value, created_at, validate, args_dict, validate_arity):
-                        await backend_inst.aincr_stat(fn.__name__, 'hits')
+                        await _safe_aincr_stat(backend_inst, fn.__name__, 'hits')
                         return value
 
                 mutex = backend_inst.get_async_mutex(cache_key)
-                acquired = await mutex.acquire(timeout=cfg.lock_timeout)
+                try:
+                    acquired = await mutex.acquire(timeout=cfg.lock_timeout)
+                except Exception:
+                    if not fail_open:
+                        raise
+                    logger.warning(
+                        f'Cache lock acquire failed for {fn.__name__!r}; '
+                        f'proceeding without lock', exc_info=True)
+                    acquired = False
                 try:
                     if not overwrite_cache:
-                        value, created_at = await backend_inst.aget_with_metadata(cache_key)
+                        value, created_at = await _safe_aget(
+                            backend_inst, cache_key, fail_open, fn.__name__)
                         if value is not NO_VALUE and validate_entry(
                                 value, created_at, validate, args_dict, validate_arity):
-                            await backend_inst.aincr_stat(fn.__name__, 'hits')
+                            await _safe_aincr_stat(backend_inst, fn.__name__, 'hits')
                             return value
 
-                    await backend_inst.aincr_stat(fn.__name__, 'misses')
+                    await _safe_aincr_stat(backend_inst, fn.__name__, 'misses')
                     result = await fn(*args, **kwargs)
 
                     if cache_if is None:
@@ -192,7 +257,12 @@ def cache(
                     return result
                 finally:
                     if acquired:
-                        await mutex.release()
+                        try:
+                            await mutex.release()
+                        except Exception:
+                            logger.warning(
+                                f'Cache lock release failed for {fn.__name__!r}',
+                                exc_info=True)
 
             async_wrapper._cache_meta = meta
             async_wrapper._cache_key_generator = key_generator
@@ -216,26 +286,37 @@ def cache(
 
                 base_key, args_dict = key_generator(*args, **kwargs)
                 cache_key = mangle_key(base_key, cfg.key_prefix, ttl_for_backend)
+                fail_open = cfg.fail_open
 
                 if not overwrite_cache:
-                    value, created_at = backend_inst.get_with_metadata(cache_key)
+                    value, created_at = _safe_get(
+                        backend_inst, cache_key, fail_open, fn.__name__)
 
                     if value is not NO_VALUE and validate_entry(
                             value, created_at, validate, args_dict, validate_arity):
-                        backend_inst.incr_stat(fn.__name__, 'hits')
+                        _safe_incr_stat(backend_inst, fn.__name__, 'hits')
                         return value
 
                 mutex = backend_inst.get_mutex(cache_key)
-                acquired = mutex.acquire(timeout=cfg.lock_timeout)
+                try:
+                    acquired = mutex.acquire(timeout=cfg.lock_timeout)
+                except Exception:
+                    if not fail_open:
+                        raise
+                    logger.warning(
+                        f'Cache lock acquire failed for {fn.__name__!r}; '
+                        f'proceeding without lock', exc_info=True)
+                    acquired = False
                 try:
                     if not overwrite_cache:
-                        value, created_at = backend_inst.get_with_metadata(cache_key)
+                        value, created_at = _safe_get(
+                            backend_inst, cache_key, fail_open, fn.__name__)
                         if value is not NO_VALUE and validate_entry(
                                 value, created_at, validate, args_dict, validate_arity):
-                            backend_inst.incr_stat(fn.__name__, 'hits')
+                            _safe_incr_stat(backend_inst, fn.__name__, 'hits')
                             return value
 
-                    backend_inst.incr_stat(fn.__name__, 'misses')
+                    _safe_incr_stat(backend_inst, fn.__name__, 'misses')
                     result = fn(*args, **kwargs)
 
                     if cache_if is None:
@@ -263,7 +344,12 @@ def cache(
                     return result
                 finally:
                     if acquired:
-                        mutex.release()
+                        try:
+                            mutex.release()
+                        except Exception:
+                            logger.warning(
+                                f'Cache lock release failed for {fn.__name__!r}',
+                                exc_info=True)
 
             sync_wrapper._cache_meta = meta
             sync_wrapper._cache_key_generator = key_generator
@@ -305,6 +391,8 @@ _CURRSIZE_LOCK_TTL = 30
 _CURRSIZE_FRESH_PREFIX = 'cachu:_currsize:'
 _CURRSIZE_LAST_PREFIX = 'cachu:_currsize_last:'
 _CURRSIZE_LOCK_PREFIX = 'cachu:_currsize_lock:'
+
+_background_tasks: set[asyncio.Task] = set()
 
 
 def _currsize_keys(package: str | None, fn_name: str) -> tuple[str, str, str]:
@@ -354,15 +442,16 @@ async def _get_cached_currsize_async(
     """
     fresh_key, last_key, lock_key = _currsize_keys(package, fn_name)
     client = backend._get_async_client()
-    fresh = await client.get(fresh_key)
+    fresh, last = await client.mget(fresh_key, last_key)
     if fresh is not None:
         return int(fresh)
 
-    last = await client.get(last_key)
     got_lock = await client.set(lock_key, b'1', nx=True, ex=_CURRSIZE_LOCK_TTL)
     if got_lock:
-        asyncio.create_task(_refresh_currsize_async(
+        task = asyncio.create_task(_refresh_currsize_async(
             backend, fresh_key, last_key, lock_key, pattern))
+        _background_tasks.add(task)
+        task.add_done_callback(_background_tasks.discard)
 
     return int(last) if last is not None else 0
 
