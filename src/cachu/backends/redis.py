@@ -202,6 +202,8 @@ class RedisBackend(Backend):
 
     def clear(self, pattern: str | None = None) -> int:
         """Clear entries matching pattern. Returns count of cleared entries.
+
+        Single-key UNLINKs are pipelined to stay legal on Redis Cluster.
         """
         if pattern is None:
             pattern = '*'
@@ -210,7 +212,10 @@ class RedisBackend(Backend):
         count = 0
         for start in range(0, len(keys), _CLEAR_BATCH_SIZE):
             chunk = keys[start:start + _CLEAR_BATCH_SIZE]
-            self.client.unlink(*chunk)
+            pipe = self.client.pipeline(transaction=False)
+            for key in chunk:
+                pipe.unlink(key)
+            pipe.execute()
             count += len(chunk)
         return count
 
@@ -305,6 +310,8 @@ class RedisBackend(Backend):
 
     async def aclear(self, pattern: str | None = None) -> int:
         """Async clear entries matching pattern. Returns count of cleared entries.
+
+        Single-key UNLINKs are pipelined to stay legal on Redis Cluster.
         """
         client = self._get_async_client()
         if pattern is None:
@@ -314,7 +321,10 @@ class RedisBackend(Backend):
         count = 0
         for start in range(0, len(keys), _CLEAR_BATCH_SIZE):
             chunk = keys[start:start + _CLEAR_BATCH_SIZE]
-            await client.unlink(*chunk)
+            pipe = client.pipeline(transaction=False)
+            for key in chunk:
+                pipe.unlink(key)
+            await pipe.execute()
             count += len(chunk)
         return count
 

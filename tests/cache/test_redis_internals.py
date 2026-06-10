@@ -9,6 +9,30 @@ import asyncio
 from cachu.backends.redis import RedisBackend
 
 
+class _RecordingSyncPipeline:
+    """Sync pipeline stand-in: one execute() is one round trip.
+    """
+
+    def __init__(self, client) -> None:
+        self._client = client
+        self._queued = []
+
+    def unlink(self, *keys):
+        self._queued.append(keys)
+        self._client.command_key_counts.append(len(keys))
+        return self
+
+    def execute(self):
+        flushed = []
+        for keys in self._queued:
+            for key in keys:
+                self._client.store.pop(key, None)
+                flushed.append(key)
+        self._client.unlink_calls.append(tuple(flushed))
+        self._queued = []
+        return [1] * len(flushed)
+
+
 class _RecordingSyncRedis:
     """Sync Redis stand-in that records delete/unlink batch sizes.
     """
@@ -17,11 +41,15 @@ class _RecordingSyncRedis:
         self.store = {}
         self.unlink_calls = []
         self.delete_calls = []
+        self.command_key_counts = []
 
     def scan_iter(self, match=None, count=None):
         for key in list(self.store):
             if match is None or fnmatch.fnmatch(key, match):
                 yield key
+
+    def pipeline(self, transaction=True):
+        return _RecordingSyncPipeline(self)
 
     def unlink(self, *keys):
         self.unlink_calls.append(tuple(keys))
@@ -36,6 +64,30 @@ class _RecordingSyncRedis:
         return len(keys)
 
 
+class _RecordingAsyncPipeline:
+    """Async pipeline stand-in: one execute() is one round trip.
+    """
+
+    def __init__(self, client) -> None:
+        self._client = client
+        self._queued = []
+
+    def unlink(self, *keys):
+        self._queued.append(keys)
+        self._client.command_key_counts.append(len(keys))
+        return self
+
+    async def execute(self):
+        flushed = []
+        for keys in self._queued:
+            for key in keys:
+                self._client.store.pop(key, None)
+                flushed.append(key)
+        self._client.unlink_calls.append(tuple(flushed))
+        self._queued = []
+        return [1] * len(flushed)
+
+
 class _RecordingAsyncRedis:
     """Async Redis stand-in that records delete/unlink batch sizes.
     """
@@ -44,11 +96,15 @@ class _RecordingAsyncRedis:
         self.store = {}
         self.unlink_calls = []
         self.delete_calls = []
+        self.command_key_counts = []
 
     async def scan_iter(self, match=None, count=None):
         for key in list(self.store):
             if match is None or fnmatch.fnmatch(key, match):
                 yield key
+
+    def pipeline(self, transaction=True):
+        return _RecordingAsyncPipeline(self)
 
     async def unlink(self, *keys):
         self.unlink_calls.append(tuple(keys))
@@ -95,6 +151,40 @@ async def test_aclear_batches_deletes_into_few_round_trips():
     assert fake.store == {}
     round_trips = len(fake.unlink_calls) + len(fake.delete_calls)
     assert round_trips <= 3, f'expected batched deletes, got {round_trips} round trips'
+
+
+def test_clear_issues_single_key_unlinks_for_cluster_safety():
+    """clear() never sends a multi-key UNLINK, which is illegal across cluster slots.
+    """
+    backend = RedisBackend('redis://localhost:6379/0')
+    fake = _RecordingSyncRedis()
+    backend._sync_client = fake
+    for i in range(250):
+        fake.store[f'1m:test:fn|x={i}'] = b'v'
+
+    cleared = backend.clear('1m:test:fn|*')
+
+    assert cleared == 250
+    assert fake.store == {}
+    assert fake.command_key_counts
+    assert max(fake.command_key_counts) == 1
+
+
+async def test_aclear_issues_single_key_unlinks_for_cluster_safety():
+    """aclear() never sends a multi-key UNLINK, which is illegal across cluster slots.
+    """
+    backend = RedisBackend('redis://localhost:6379/0')
+    fake = _RecordingAsyncRedis()
+    backend._async_client = fake
+    for i in range(250):
+        fake.store[f'1m:test:fn|x={i}'] = b'v'
+
+    cleared = await backend.aclear('1m:test:fn|*')
+
+    assert cleared == 250
+    assert fake.store == {}
+    assert fake.command_key_counts
+    assert max(fake.command_key_counts) == 1
 
 
 class _CurrsizeFakeClient:
