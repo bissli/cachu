@@ -7,10 +7,13 @@ import logging
 import os
 import pathlib
 import sys
+import threading
 from dataclasses import asdict, dataclass, replace
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+VALID_BACKENDS = ('memory', 'redis', 'file', 'null')
 
 _disabled: bool = False
 
@@ -62,6 +65,7 @@ class CacheConfig:
     redis_health_check_interval: int = 30
     redis_socket_timeout: float = 5.0
     redis_retry_count: int = 3
+    fail_open: bool = True
 
 
 class ConfigRegistry:
@@ -75,6 +79,7 @@ class ConfigRegistry:
     def __init__(self) -> None:
         self._configs: dict[str | None, CacheConfig] = {}
         self._default = CacheConfig()
+        self._lock = threading.Lock()
 
     def configure(
         self,
@@ -87,6 +92,7 @@ class ConfigRegistry:
         redis_health_check_interval: int | None = None,
         redis_socket_timeout: float | None = None,
         redis_retry_count: int | None = None,
+        fail_open: bool | None = None,
     ) -> CacheConfig:
         """Configure cache for a specific package.
         """
@@ -102,30 +108,27 @@ class ConfigRegistry:
             'redis_health_check_interval': redis_health_check_interval,
             'redis_socket_timeout': redis_socket_timeout,
             'redis_retry_count': redis_retry_count,
+            'fail_open': fail_open,
         }
         updates = {k: v for k, v in updates.items() if v is not None}
 
         self._validate_config(updates)
 
-        if package not in self._configs:
-            self._configs[package] = replace(self._default)
-            logger.debug(f"Created new cache config for package '{package}'")
-
-        cfg = self._configs[package]
-        for key, value in updates.items():
-            setattr(cfg, key, value)
+        with self._lock:
+            base = self._configs.get(package, self._default)
+            new_cfg = replace(base, **updates)
+            self._configs[package] = new_cfg
 
         logger.debug(f"Configured cache for package '{package}': {updates}")
-        return cfg
+        return new_cfg
 
     def _validate_config(self, kwargs: dict[str, Any]) -> None:
         """Validate configuration values.
         """
         if 'backend_default' in kwargs:
             backend = kwargs['backend_default']
-            valid_backends = ('memory', 'redis', 'file', 'null')
-            if backend not in valid_backends:
-                raise ValueError(f'backend must be one of {valid_backends}, got {backend!r}')
+            if backend not in VALID_BACKENDS:
+                raise ValueError(f'backend must be one of {VALID_BACKENDS}, got {backend!r}')
 
         if 'file_dir' in kwargs:
             file_dir = kwargs['file_dir']
@@ -168,6 +171,7 @@ def configure(
     redis_health_check_interval: int | None = None,
     redis_socket_timeout: float | None = None,
     redis_retry_count: int | None = None,
+    fail_open: bool | None = None,
 ) -> CacheConfig:
     """Configure cache settings for the caller's package.
 
@@ -183,6 +187,8 @@ def configure(
         redis_health_check_interval: Seconds between connection health checks (default: 30)
         redis_socket_timeout: Socket timeout in seconds (default: 5.0)
         redis_retry_count: Number of retries on connection failure (default: 3)
+        fail_open: When True (default), backend read/lock errors degrade to a
+            cache miss; when False they propagate to the caller.
     """
     return _registry.configure(
         backend_default=backend_default,
@@ -193,6 +199,7 @@ def configure(
         redis_health_check_interval=redis_health_check_interval,
         redis_socket_timeout=redis_socket_timeout,
         redis_retry_count=redis_retry_count,
+        fail_open=fail_open,
     )
 
 

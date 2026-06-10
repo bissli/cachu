@@ -121,17 +121,19 @@ class TestConfigRegistry:
         assert cfg2.key_prefix == 'v2:'
         assert cfg1 is not cfg2
 
-    def test_registry_returns_same_config_for_same_package(self, tmp_path):
-        """Verify registry returns existing config for same package.
+    def test_registry_merges_updates_for_same_package(self, tmp_path):
+        """Verify reconfiguring a package merges updates into a new config object.
         """
         registry = ConfigRegistry()
 
         cfg1 = registry.configure(package='pkg1', key_prefix='v1:')
         cfg2 = registry.configure(package='pkg1', file_dir=str(tmp_path))
 
-        assert cfg1 is cfg2
+        assert cfg1 is not cfg2
         assert cfg1.key_prefix == 'v1:'
-        assert cfg1.file_dir == str(tmp_path)
+        assert cfg2.key_prefix == 'v1:'
+        assert cfg2.file_dir == str(tmp_path)
+        assert registry.get_config('pkg1') is cfg2
 
     def test_registry_get_config_returns_default_for_unknown_package(self):
         """Verify get_config returns default config for unconfigured package.
