@@ -4,6 +4,7 @@ import asyncio
 import threading
 import time
 import uuid
+import weakref
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, ClassVar, Self
 
@@ -113,20 +114,35 @@ class ThreadingMutex(CacheMutex):
 
 
 class AsyncioMutex(AsyncCacheMutex):
-    """Per-key asyncio.Lock for local async dogpile prevention.
+    """Per-key asyncio.Lock for async dogpile prevention, scoped per event loop.
     """
-    _locks: ClassVar[dict[str, asyncio.Lock]] = {}
+    _loop_locks: ClassVar[
+        'weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, dict[str, asyncio.Lock]]'
+    ] = weakref.WeakKeyDictionary()
     _registry_lock: ClassVar[threading.Lock] = threading.Lock()
 
     def __init__(self, key: str) -> None:
         self._key = key
         self._acquired = False
+        self._lock: asyncio.Lock | None = None
+
+    def _resolve_lock(self) -> asyncio.Lock:
+        """Return the lock for this key on the currently running event loop.
+        """
+        loop = asyncio.get_running_loop()
         with self._registry_lock:
-            if key not in self._locks:
-                self._locks[key] = asyncio.Lock()
-            self._lock = self._locks[key]
+            per_loop = self._loop_locks.get(loop)
+            if per_loop is None:
+                per_loop = {}
+                self._loop_locks[loop] = per_loop
+            lock = per_loop.get(self._key)
+            if lock is None:
+                lock = asyncio.Lock()
+                per_loop[self._key] = lock
+            return lock
 
     async def acquire(self, timeout: float | None = None) -> bool:
+        self._lock = self._resolve_lock()
         if timeout is None:
             await self._lock.acquire()
             self._acquired = True
@@ -140,7 +156,7 @@ class AsyncioMutex(AsyncCacheMutex):
             return False
 
     async def release(self) -> None:
-        if self._acquired:
+        if self._acquired and self._lock is not None:
             self._lock.release()
             self._acquired = False
 
@@ -149,7 +165,7 @@ class AsyncioMutex(AsyncCacheMutex):
         """Clear all locks. For testing only.
         """
         with cls._registry_lock:
-            cls._locks.clear()
+            cls._loop_locks.clear()
 
 
 class RedisMutex(CacheMutex):
@@ -182,7 +198,7 @@ class RedisMutex(CacheMutex):
                 self._key,
                 self._token,
                 nx=True,
-                ex=int(self._lock_timeout),
+                ex=max(1, round(self._lock_timeout)),
             ):
                 self._acquired = True
                 return True
@@ -225,7 +241,7 @@ class AsyncRedisMutex(AsyncCacheMutex):
                 self._key,
                 self._token,
                 nx=True,
-                ex=int(self._lock_timeout),
+                ex=max(1, round(self._lock_timeout)),
             ):
                 self._acquired = True
                 return True

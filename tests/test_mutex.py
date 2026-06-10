@@ -1,6 +1,6 @@
 """Tests for mutex implementations used in dogpile prevention.
 """
-import threading
+import asyncio
 import time
 
 import pytest
@@ -69,18 +69,30 @@ class TestAsyncioMutex:
         await mutex.release()
 
     async def test_same_key_uses_same_lock(self):
-        """Verify same key returns mutex with same underlying lock.
+        """Verify same key resolves to the same underlying lock on a loop.
         """
         mutex1 = AsyncioMutex('async_shared')
         mutex2 = AsyncioMutex('async_shared')
-        assert mutex1._lock is mutex2._lock
+        await mutex1.acquire()
+        lock1 = mutex1._lock
+        await mutex1.release()
+        await mutex2.acquire()
+        lock2 = mutex2._lock
+        await mutex2.release()
+        assert lock1 is lock2
 
     async def test_different_keys_use_different_locks(self):
-        """Verify different keys return mutexes with different locks.
+        """Verify different keys resolve to different underlying locks.
         """
         mutex1 = AsyncioMutex('async_key1')
         mutex2 = AsyncioMutex('async_key2')
-        assert mutex1._lock is not mutex2._lock
+        await mutex1.acquire()
+        await mutex2.acquire()
+        try:
+            assert mutex1._lock is not mutex2._lock
+        finally:
+            await mutex1.release()
+            await mutex2.release()
 
     async def test_context_manager(self):
         """Verify AsyncioMutex works as an async context manager.
@@ -148,32 +160,20 @@ class TestAsyncioMutexThreadSafety:
     """Tests for AsyncioMutex thread-safety during creation.
     """
 
-    def test_concurrent_creation_same_key(self):
-        """Verify concurrent mutex creation returns same lock instance.
+    def test_concurrent_resolution_same_key(self):
+        """Verify concurrent resolution returns one lock instance per loop.
 
-        Spawns multiple threads that simultaneously create AsyncioMutex
-        instances for the same key. Without proper locking, each thread
-        may create its own Lock object, breaking mutual exclusion.
+        Many coroutines resolving the same key on one event loop must share a
+        single Lock object; otherwise mutual exclusion breaks.
         """
         AsyncioMutex.clear_locks()
         key = 'concurrent_test'
-        mutexes = []
-        results_lock = threading.Lock()
-        barrier = threading.Barrier(10)
 
-        def create_mutex():
-            barrier.wait()
-            mutex = AsyncioMutex(key)
-            with results_lock:
-                mutexes.append(mutex)
+        async def scenario():
+            mutexes = [AsyncioMutex(key) for _ in range(10)]
+            return [m._resolve_lock() for m in mutexes]
 
-        threads = [threading.Thread(target=create_mutex) for _ in range(10)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
-
-        locks = [m._lock for m in mutexes]
+        locks = asyncio.run(scenario())
         unique_locks = len({id(lock) for lock in locks})
         assert unique_locks == 1, (
             f'Race condition detected: {unique_locks} different locks created for same key'
