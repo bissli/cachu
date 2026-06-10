@@ -7,6 +7,35 @@ from typing import Any
 
 from .api import CacheEntry
 
+_KEY_ESCAPE = {'%': '%25', ' ': '%20', '=': '%3D', '|': '%7C', '*': '%2A', '?': '%3F', '[': '%5B', ']': '%5D'}
+_KEY_ESCAPE_TABLE = str.maketrans({ord(k): v for k, v in _KEY_ESCAPE.items()})
+
+
+def _stable_repr(value: Any) -> str:
+    """Render a value to a deterministic, restart-stable string.
+
+    Sets and dicts are emitted in a canonical (sorted) order so the cache key
+    does not depend on PYTHONHASHSEED-randomised iteration order.
+    """
+    if isinstance(value, (set, frozenset)):
+        return '{' + ', '.join(_stable_repr(v) for v in sorted(value, key=repr)) + '}'
+    if isinstance(value, dict):
+        items = sorted(value.items(), key=lambda kv: repr(kv[0]))
+        return '{' + ', '.join(f'{_stable_repr(k)}: {_stable_repr(v)}' for k, v in items) + '}'
+    if isinstance(value, list):
+        return '[' + ', '.join(_stable_repr(v) for v in value) + ']'
+    if isinstance(value, tuple):
+        return '(' + ', '.join(_stable_repr(v) for v in value) + ')'
+    return repr(value)
+
+
+def _render_value(value: Any) -> str:
+    """Render a value for a cache key: stable across restarts and free of the
+    space/'='/'|' delimiters and glob metacharacters used to build keys and
+    clear patterns.
+    """
+    return _stable_repr(value).translate(_KEY_ESCAPE_TABLE)
+
 
 def _is_connection_like(obj: Any) -> bool:
     """Check if object appears to be a database connection.
@@ -102,7 +131,7 @@ def make_key_generator(
             and not _is_connection_like(v)
         }
 
-        params_str = ' '.join(f'{k}={repr(v)}' for k, v in sorted(filtered.items()))
+        params_str = ' '.join(f'{k}={_render_value(v)}' for k, v in sorted(filtered.items()))
         return f'{key_prefix}|{params_str}', filtered
 
     return generate_key
@@ -221,7 +250,7 @@ def make_partial_pattern(
         prefix = f'{region}:{key_prefix}{base}|'
 
     if kwargs:
-        fragments = [f'{k}={repr(v)}' for k, v in sorted(kwargs.items())]
+        fragments = [f'{k}={_render_value(v)}' for k, v in sorted(kwargs.items())]
         params = f'*{"*".join(fragments)}*'
     else:
         params = '*'
