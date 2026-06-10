@@ -43,6 +43,7 @@ class SqliteBackend(Backend):
         self._async_connection: aiosqlite.Connection | None = None
         self._async_initialized = False
         self._sync_initialized = False
+        self._pending_deletes: set[asyncio.Task] = set()
 
     def _ensure_sync_initialized(self) -> None:
         """Ensure sync database schema is initialized (lazy, once).
@@ -127,6 +128,12 @@ class SqliteBackend(Backend):
     def _schedule_async_delete(self, key: str) -> None:
         """Schedule a background deletion task (fire-and-forget).
         """
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            logger.debug(f'No running event loop to delete expired key {key!r}')
+            return
+
         async def _delete() -> None:
             try:
                 async with self._async_write_lock:
@@ -134,9 +141,11 @@ class SqliteBackend(Backend):
                     await conn.execute('DELETE FROM cache WHERE key = ?', (key,))
                     await conn.commit()
             except Exception:
-                pass
+                logger.debug(f'Background delete failed for key {key!r}', exc_info=True)
 
-        asyncio.create_task(_delete())
+        task = loop.create_task(_delete())
+        self._pending_deletes.add(task)
+        task.add_done_callback(self._pending_deletes.discard)
 
     # ===== Sync interface =====
 
@@ -161,8 +170,17 @@ class SqliteBackend(Backend):
                     conn.commit()
                     return NO_VALUE
 
-                return pickle.loads(value_blob)
+                try:
+                    return pickle.loads(value_blob)
+                except Exception:
+                    logger.warning(
+                        f'Evicting undecodable cache row for key {key!r}',
+                        exc_info=True)
+                    conn.execute('DELETE FROM cache WHERE key = ?', (key,))
+                    conn.commit()
+                    return NO_VALUE
             except Exception:
+                logger.warning(f'SQLite read failed for key {key!r}', exc_info=True)
                 return NO_VALUE
             finally:
                 conn.close()
@@ -188,15 +206,28 @@ class SqliteBackend(Backend):
                     conn.commit()
                     return NO_VALUE, None
 
-                return pickle.loads(value_blob), created_at
+                try:
+                    return pickle.loads(value_blob), created_at
+                except Exception:
+                    logger.warning(
+                        f'Evicting undecodable cache row for key {key!r}',
+                        exc_info=True)
+                    conn.execute('DELETE FROM cache WHERE key = ?', (key,))
+                    conn.commit()
+                    return NO_VALUE, None
             except Exception:
+                logger.warning(f'SQLite read failed for key {key!r}', exc_info=True)
                 return NO_VALUE, None
             finally:
                 conn.close()
 
     def set(self, key: str, value: Any, ttl: int) -> None:
-        """Set value with TTL in seconds.
+        """Set value with TTL in seconds. A non-positive TTL is not cached.
         """
+        if ttl <= 0:
+            self.delete(key)
+            return
+
         now = time.time()
         value_blob = pickle.dumps(value)
 
@@ -262,13 +293,13 @@ class SqliteBackend(Backend):
             try:
                 if pattern is None:
                     cursor = conn.execute(
-                        'SELECT key FROM cache WHERE expires_at > ?',
+                        'SELECT key FROM cache WHERE expires_at >= ?',
                         (now,),
                     )
                 else:
                     glob_pattern = self._fnmatch_to_glob(pattern)
                     cursor = conn.execute(
-                        'SELECT key FROM cache WHERE key GLOB ? AND expires_at > ?',
+                        'SELECT key FROM cache WHERE key GLOB ? AND expires_at >= ?',
                         (glob_pattern, now),
                     )
 
@@ -288,13 +319,13 @@ class SqliteBackend(Backend):
             try:
                 if pattern is None:
                     cursor = conn.execute(
-                        'SELECT COUNT(*) FROM cache WHERE expires_at > ?',
+                        'SELECT COUNT(*) FROM cache WHERE expires_at >= ?',
                         (now,),
                     )
                 else:
                     glob_pattern = self._fnmatch_to_glob(pattern)
                     cursor = conn.execute(
-                        'SELECT COUNT(*) FROM cache WHERE key GLOB ? AND expires_at > ?',
+                        'SELECT COUNT(*) FROM cache WHERE key GLOB ? AND expires_at >= ?',
                         (glob_pattern, now),
                     )
 
@@ -318,11 +349,11 @@ class SqliteBackend(Backend):
             conn = self._get_sync_connection()
             try:
                 cursor = conn.execute(
-                    'SELECT COUNT(*) FROM cache WHERE expires_at <= ?',
+                    'SELECT COUNT(*) FROM cache WHERE expires_at < ?',
                     (now,),
                 )
                 count = cursor.fetchone()[0]
-                conn.execute('DELETE FROM cache WHERE expires_at <= ?', (now,))
+                conn.execute('DELETE FROM cache WHERE expires_at < ?', (now,))
                 conn.commit()
                 return count
             finally:
@@ -404,8 +435,16 @@ class SqliteBackend(Backend):
                 self._schedule_async_delete(key)
                 return NO_VALUE
 
-            return pickle.loads(value_blob)
+            try:
+                return pickle.loads(value_blob)
+            except Exception:
+                logger.warning(
+                    f'Evicting undecodable cache row for key {key!r}',
+                    exc_info=True)
+                self._schedule_async_delete(key)
+                return NO_VALUE
         except Exception:
+            logger.warning(f'SQLite async read failed for key {key!r}', exc_info=True)
             return NO_VALUE
 
     async def aget_with_metadata(self, key: str) -> tuple[Any, float | None]:
@@ -427,13 +466,25 @@ class SqliteBackend(Backend):
                 self._schedule_async_delete(key)
                 return NO_VALUE, None
 
-            return pickle.loads(value_blob), created_at
+            try:
+                return pickle.loads(value_blob), created_at
+            except Exception:
+                logger.warning(
+                    f'Evicting undecodable cache row for key {key!r}',
+                    exc_info=True)
+                self._schedule_async_delete(key)
+                return NO_VALUE, None
         except Exception:
+            logger.warning(f'SQLite async read failed for key {key!r}', exc_info=True)
             return NO_VALUE, None
 
     async def aset(self, key: str, value: Any, ttl: int) -> None:
-        """Async set value with TTL in seconds.
+        """Async set value with TTL in seconds. A non-positive TTL is not cached.
         """
+        if ttl <= 0:
+            await self.adelete(key)
+            return
+
         now = time.time()
         value_blob = pickle.dumps(value)
 
@@ -492,13 +543,13 @@ class SqliteBackend(Backend):
 
         if pattern is None:
             cursor = await conn.execute(
-                'SELECT key FROM cache WHERE expires_at > ?',
+                'SELECT key FROM cache WHERE expires_at >= ?',
                 (now,),
             )
         else:
             glob_pattern = self._fnmatch_to_glob(pattern)
             cursor = await conn.execute(
-                'SELECT key FROM cache WHERE key GLOB ? AND expires_at > ?',
+                'SELECT key FROM cache WHERE key GLOB ? AND expires_at >= ?',
                 (glob_pattern, now),
             )
 
@@ -516,13 +567,13 @@ class SqliteBackend(Backend):
             conn = await self._ensure_async_initialized()
             if pattern is None:
                 cursor = await conn.execute(
-                    'SELECT COUNT(*) FROM cache WHERE expires_at > ?',
+                    'SELECT COUNT(*) FROM cache WHERE expires_at >= ?',
                     (now,),
                 )
             else:
                 glob_pattern = self._fnmatch_to_glob(pattern)
                 cursor = await conn.execute(
-                    'SELECT COUNT(*) FROM cache WHERE key GLOB ? AND expires_at > ?',
+                    'SELECT COUNT(*) FROM cache WHERE key GLOB ? AND expires_at >= ?',
                     (glob_pattern, now),
                 )
 
@@ -544,12 +595,12 @@ class SqliteBackend(Backend):
         async with self._async_write_lock:
             conn = await self._ensure_async_initialized()
             cursor = await conn.execute(
-                'SELECT COUNT(*) FROM cache WHERE expires_at <= ?',
+                'SELECT COUNT(*) FROM cache WHERE expires_at < ?',
                 (now,),
             )
             row = await cursor.fetchone()
             count = row[0]
-            await conn.execute('DELETE FROM cache WHERE expires_at <= ?', (now,))
+            await conn.execute('DELETE FROM cache WHERE expires_at < ?', (now,))
             await conn.commit()
             return count
 

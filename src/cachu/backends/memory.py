@@ -38,8 +38,11 @@ class MemoryBackend(Backend):
         return value, created_at
 
     def _do_set(self, key: str, value: Any, ttl: int) -> None:
-        """Set value without locking.
+        """Set value without locking. A non-positive TTL is not cached.
         """
+        if ttl <= 0:
+            self._cache.pop(key, None)
+            return
         now = time.time()
         self._cache[key] = (value, now, now + ttl)
 
