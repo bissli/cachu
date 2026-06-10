@@ -19,6 +19,7 @@ if TYPE_CHECKING:
 _METADATA_FORMAT = 'd'
 _METADATA_SIZE = struct.calcsize(_METADATA_FORMAT)
 _STATS_KEY_PREFIX = 'cachu:stats:'
+_CLEAR_BATCH_SIZE = 500
 
 
 def _get_redis_module() -> Any:
@@ -185,8 +186,11 @@ class RedisBackend(Backend):
         return result
 
     def set(self, key: str, value: Any, ttl: int) -> None:
-        """Set value with TTL in seconds.
+        """Set value with TTL in seconds. A non-positive TTL is not cached.
         """
+        if ttl <= 0:
+            self.client.delete(key)
+            return
         now = time.time()
         packed = _pack_value(value, now)
         self.client.setex(key, ttl, packed)
@@ -202,10 +206,12 @@ class RedisBackend(Backend):
         if pattern is None:
             pattern = '*'
 
+        keys = list(self.client.scan_iter(match=pattern))
         count = 0
-        for key in self.client.scan_iter(match=pattern):
-            self.client.delete(key)
-            count += 1
+        for start in range(0, len(keys), _CLEAR_BATCH_SIZE):
+            chunk = keys[start:start + _CLEAR_BATCH_SIZE]
+            self.client.unlink(*chunk)
+            count += len(chunk)
         return count
 
     def keys(self, pattern: str | None = None) -> Iterator[str]:
@@ -281,9 +287,12 @@ class RedisBackend(Backend):
         return result
 
     async def aset(self, key: str, value: Any, ttl: int) -> None:
-        """Async set value with TTL in seconds.
+        """Async set value with TTL in seconds. A non-positive TTL is not cached.
         """
         client = self._get_async_client()
+        if ttl <= 0:
+            await client.delete(key)
+            return
         now = time.time()
         packed = _pack_value(value, now)
         await client.setex(key, ttl, packed)
@@ -301,10 +310,12 @@ class RedisBackend(Backend):
         if pattern is None:
             pattern = '*'
 
+        keys = [key async for key in client.scan_iter(match=pattern)]
         count = 0
-        async for key in client.scan_iter(match=pattern):
-            await client.delete(key)
-            count += 1
+        for start in range(0, len(keys), _CLEAR_BATCH_SIZE):
+            chunk = keys[start:start + _CLEAR_BATCH_SIZE]
+            await client.unlink(*chunk)
+            count += len(chunk)
         return count
 
     async def akeys(self, pattern: str | None = None) -> AsyncIterator[str]:
