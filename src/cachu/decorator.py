@@ -397,8 +397,11 @@ _background_tasks: set[asyncio.Task] = set()
 
 def _currsize_keys(package: str | None, fn_name: str) -> tuple[str, str, str]:
     """Build the (fresh, last, lock) Redis keys for a (package, fn_name) pair.
+
+    The variable part is wrapped in a '{...}' hash tag so all three keys map to
+    the same Redis Cluster slot, keeping the multi-key MGET legal on cluster.
     """
-    suffix = f'{package or "_"}:{fn_name}'
+    suffix = '{' + f'{package or "_"}:{fn_name}' + '}'
     return (
         f'{_CURRSIZE_FRESH_PREFIX}{suffix}',
         f'{_CURRSIZE_LAST_PREFIX}{suffix}',
@@ -477,11 +480,17 @@ async def get_async_cache_info(fn: Callable[..., Any]) -> CacheInfo:
     pattern = f'*:{cfg.key_prefix}{fn_name}|*'
 
     from .backends.redis import RedisBackend
-    if isinstance(backend_instance, RedisBackend):
-        currsize = await _get_cached_currsize_async(
-            backend_instance, meta.package, fn_name, pattern)
-    else:
-        currsize = await backend_instance.acount(pattern)
+    try:
+        if isinstance(backend_instance, RedisBackend):
+            currsize = await _get_cached_currsize_async(
+                backend_instance, meta.package, fn_name, pattern)
+        else:
+            currsize = await backend_instance.acount(pattern)
+    except Exception:
+        if not get_config(meta.package).fail_open:
+            raise
+        logger.exception('currsize lookup failed; reporting 0')
+        currsize = 0
 
     return CacheInfo(hits=hits, misses=misses, currsize=currsize)
 
