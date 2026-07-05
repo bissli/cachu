@@ -28,6 +28,39 @@ def test_get_evicts_corrupt_row(tmp_path):
     assert remaining == 0
 
 
+def test_sync_path_is_wal_and_tolerates_concurrent_writers(tmp_path):
+    """The sync backend opens the DB in WAL mode with a busy_timeout, so many
+    concurrent sync writers neither raise 'database is locked' nor drop a value.
+    """
+    import threading
+
+    backend = SqliteBackend(str(tmp_path / 'cache.db'))
+    backend.set('warm', 'v', 300)
+
+    conn = sqlite3.connect(backend._filepath)
+    mode = conn.execute('PRAGMA journal_mode').fetchone()[0]
+    conn.close()
+    assert mode.lower() == 'wal'
+
+    errors = []
+
+    def writer(worker):
+        try:
+            for j in range(20):
+                backend.set(f'k{worker}-{j}', j, 300)
+        except sqlite3.OperationalError as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=writer, args=(i,)) for i in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert errors == []
+    assert backend.get('k7-19') == 19
+
+
 async def test_aget_evicts_corrupt_row(tmp_path):
     """Async read also evicts a corrupt row.
     """

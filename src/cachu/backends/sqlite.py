@@ -55,6 +55,13 @@ class SqliteBackend(Backend):
                 return
             conn = sqlite3.connect(self._filepath)
             try:
+                # WAL lets readers and a writer proceed concurrently (persistent
+                # at the DB level, set once here); busy_timeout makes a
+                # contended connection wait rather than fail with a spurious
+                # 'database is locked' - the sync path was missing both, so
+                # concurrent writers (e.g. reactive materialization) could miss.
+                conn.execute('PRAGMA journal_mode=WAL')
+                conn.execute('PRAGMA busy_timeout=5000')
                 conn.execute("""
                     CREATE TABLE IF NOT EXISTS cache (
                         key TEXT PRIMARY KEY,
@@ -115,10 +122,12 @@ class SqliteBackend(Backend):
         return self._async_connection
 
     def _get_sync_connection(self) -> sqlite3.Connection:
-        """Get a sync database connection.
+        """Get a sync database connection (busy-timeout guarded; DB is WAL).
         """
         self._ensure_sync_initialized()
-        return sqlite3.connect(self._filepath)
+        conn = sqlite3.connect(self._filepath)
+        conn.execute('PRAGMA busy_timeout=5000')
+        return conn
 
     def _fnmatch_to_glob(self, pattern: str) -> str:
         """Convert fnmatch pattern to SQLite GLOB pattern.
