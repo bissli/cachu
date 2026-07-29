@@ -1,7 +1,7 @@
 # cachu
 *pronunciation: ka-SHOO*
 
-Flexible caching library with support for memory, file, and Redis backends.
+Flexible caching library with support for memory, file, Redis, and null backends.
 
 ## Installation
 
@@ -52,12 +52,40 @@ cachu.configure(
 
 ### Configuration Options
 
-| Option            | Default                      | Description                                                   |
-| ----------------- | ---------------------------- | ------------------------------------------------------------- |
-| `backend_default` | `'memory'`                   | Default backend: `'memory'`, `'file'`, `'redis'`, or `'null'` |
-| `key_prefix`      | `''`                         | Prefix for all cache keys (useful for versioning)             |
-| `file_dir`        | `'/tmp'`                     | Directory for file-based caches                               |
-| `redis_url`       | `'redis://localhost:6379/0'` | Redis connection URL (supports `rediss://` for TLS)           |
+| Option                        | Default                      | Description                                                                                           |
+| ----------------------------- | ---------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `backend_default`             | `'memory'`                   | Default backend: `'memory'`, `'file'`, `'redis'`, or `'null'`                                         |
+| `key_prefix`                  | `''`                         | Prefix for all cache keys (useful for versioning)                                                     |
+| `file_dir`                    | `'/tmp'`                     | Directory for file-based caches                                                                       |
+| `redis_url`                   | `'redis://localhost:6379/0'` | Redis connection URL (supports `rediss://` for TLS)                                                   |
+| `package`                     | caller's package             | Which package's configuration to set; a parameter, not a stored field ([details](#package-isolation)) |
+| `fail_open`                   | `True`                       | Degrade cache faults to a miss instead of raising ([details](#failure-semantics))                     |
+| `cache_deadline`              | `None`                       | Seconds of cache work allowed per call ([details](#bounding-cache-latency))                           |
+| `lock_timeout`                | `10.0`                       | Seconds to wait for the per-key dogpile mutex                                                         |
+| `on_lock_timeout`             | `'run'`                      | `'run'` or `'raise'` when the mutex is missed ([details](#dogpile-and-lock-timeouts))                 |
+| `memory_maxsize`              | `None`                       | LRU bound for the memory backend ([details](#bounding-the-memory-backend))                            |
+| `memory_sweep_interval`       | `60.0`                       | Seconds between expired-entry sweeps of the memory backend                                            |
+| `redis_socket_timeout`        | `5.0`                        | Socket timeout, applied to **both** connect and read                                                  |
+| `redis_retry_count`           | `3`                          | redis-py retries per operation                                                                        |
+| `redis_health_check_interval` | `30`                         | Seconds between redis-py connection health checks                                                     |
+
+`configure()` only changes the settings you pass, and `None` means "leave unchanged" -
+so an option whose default is `None` cannot be reset through the public API once set.
+`file_dir` is validated eagerly and must already exist and be writable.
+
+### When Each Setting Takes Effect
+
+Most settings are read on every call, but three groups are not. Configure at startup,
+before the first cached call, and this never bites you:
+
+| Read when                                | Settings                                                                                                                                       |
+| ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| Decoration (import time)                 | `backend_default`                                                                                                                              |
+| Backend construction (first cached call) | `redis_url`, `redis_socket_timeout`, `redis_retry_count`, `redis_health_check_interval`, `file_dir`, `memory_maxsize`, `memory_sweep_interval` |
+| Every call                               | `key_prefix`, `fail_open`, `cache_deadline`, `lock_timeout`, `on_lock_timeout`                                                                 |
+
+Changing a construction-time setting after a backend exists has no effect on that
+backend. `cachu.clear_backends()` forces reconstruction if you need it.
 
 ### Using Multiple Backends
 
@@ -131,6 +159,33 @@ def get_shared_data(id: int) -> dict:
     return fetch(id)
 ```
 
+**Splitting one package into several config scopes:** `backend=` on the decorator is
+per-cache, but every timeout and budget is per-package. Pass `package=` to `configure()`
+to give one latency-sensitive cache its own settings without touching the rest of your
+application:
+
+```python
+import cachu
+
+# One authorization cache on the request path: fail fast.
+cachu.configure(
+    package='myapp.authz',
+    redis_socket_timeout=0.25,
+    cache_deadline=1.0,
+)
+
+# Everything else in myapp keeps the defaults.
+cachu.configure(package='myapp', redis_url='redis://cache:6379/0')
+
+@cachu.cache(ttl=60, package='myapp.authz', backend='redis')
+def is_authorized(token_hash: str) -> bool:
+    return registry_lookup(token_hash)
+```
+
+The package name is just a key, so `'myapp.authz'` above is a scope label rather than an
+importable module. Auto-detection only ever produces top-level names, so a dotted label
+cannot be claimed accidentally by another caller.
+
 **Debugging:** Enable `DEBUG` logging on the `cachu` logger to see which package and
 backend each decorated function resolved to:
 
@@ -167,6 +222,15 @@ def expensive_operation(param: str) -> dict:
 
 ### Backend Types
 
+cachu ships four backends. All are importable from `cachu.backends` for introspection.
+
+| Name       | Class           | Scope             | Use for                                        |
+| ---------- | --------------- | ----------------- | ---------------------------------------------- |
+| `'memory'` | `MemoryBackend` | This process      | Hot lookups; optionally LRU-bounded            |
+| `'file'`   | `SqliteBackend` | This machine      | Results worth surviving a restart              |
+| `'redis'`  | `RedisBackend`  | Every process     | Shared state across workers or hosts           |
+| `'null'`   | `NullBackend`   | Nothing is stored | Switching one cache off, and passthrough tests |
+
 ```python
 # Memory cache (default)
 @cache(ttl=300, backend='memory')
@@ -183,11 +247,17 @@ def load_config(name: str) -> dict:
 def fetch_external_data(api_key: str) -> dict:
     return call_external_api(api_key)
 
-# Null cache (passthrough, for testing)
+# Null cache (passthrough) - always executes, never caches
 @cache(ttl=300, backend='null')
 def always_fresh(key: str) -> str:
-    return fetch(key)  # Always executes, never caches
+    return fetch(key)
 ```
+
+`backend='null'` is the way to express "this cache is switched off" for one function.
+It is a real backend, not a testing hack: the decorator, its helper methods and
+`cache_clear` all keep working, they simply never store anything. Prefer it over
+`ttl=0` (which relies on a non-positive TTL being treated as uncacheable) and over
+`cachu.disable()`, which is process-wide unless you scope it.
 
 ### Tags for Grouping
 
@@ -500,6 +570,17 @@ cache_clear()
 | `None` | `None`    | `'memory'` | All memory regions                     |
 | `None` | `'users'` | `None`     | "users" tag across all backends        |
 
+**Clearing works in a cold process.** `@cache` registers its
+`(package, backend, ttl)` region when the decorator runs, which is import time, so
+`cache_clear` can reach a region even if no cached call has happened yet. This matters
+most in tests: a setup fixture that clears against a shared Redis or SQLite backend
+really clears it, instead of silently no-opping and letting a previous run's value be
+served.
+
+A return of `0` means "no entries matched". If no region matched at all - usually a
+misspelled `package` or `backend` - a warning is logged on the `cachu.operations`
+logger, so the two cases stay distinguishable.
+
 ### Cross-Module Clearing
 
 When clearing from a different module, use the `package` parameter:
@@ -537,6 +618,189 @@ class UserRepository:
         return {'id': 0, 'name': 'Guest'}
 ```
 
+## Reliability and Latency
+
+A cache is an optimization. On a request path it should only ever be able to cost you
+speed - never the answer, and never an unbounded amount of time. This section covers the
+three settings that make that true, and the one place where the default is deliberately
+not the safe choice.
+
+### Failure Semantics
+
+With `fail_open=True` (the default) no cache fault reaches your caller. Building the
+cache key, constructing the backend, constructing the per-key mutex, reading, and
+acquiring the lock all degrade to running the decorated function uncached.
+
+```python
+cachu.configure(backend_default='redis', redis_url='redis://unreachable:6379/0')
+
+@cachu.cache(ttl=60, tag='authz')
+def is_authorized(token: str) -> bool:
+    return registry_lookup(token)
+
+is_authorized('abc')   # returns the real answer; the cache fault is logged, not raised
+```
+
+Set `fail_open=False` to make those **read-path** faults propagate instead - appropriate
+when a cache miss is more expensive than an error.
+
+**Writes, stat updates and lock release are always best-effort**, whichever way
+`fail_open` is set: they run after the result already exists, so failing the call would
+throw away a correct answer over a cache-only problem. They are logged, never raised.
+
+**`fail_open` bounds exceptions, not hangs.** A wedged endpoint - a blackholed address
+rather than a refused connection - blocks inside socket timeouts and never raises, so
+neither `fail_open` nor a `try`/`except` around the call can shorten it. Only
+`cache_deadline` can.
+
+**The one deliberate exception** is `on_lock_timeout='raise'`: `CacheLockTimeout`
+propagates even under `fail_open=True`, because shedding load is a decision you opted
+into rather than a fault. It also escapes `_overwrite_cache=True` and `.refresh()`.
+
+The helper methods (`.get()`, `.set()`, `.clear()`, `.refresh()`) and the module-level
+CRUD functions are explicit cache operations, not cached calls: they are governed by
+neither `fail_open` nor `cache_deadline` and report backend errors directly.
+
+### Bounding Cache Latency
+
+Redis timeout budgets compound rather than add:
+
+- `redis_socket_timeout` applies to **both** the connect and the read.
+- redis-py retries each operation `redis_retry_count` times with exponential backoff.
+- One cached call performs roughly five Redis operations: get, mutex acquire, stat
+  increment, set, mutex release.
+- The mutex acquire polls `SET NX` until `lock_timeout`, paying a full socket budget on
+  every iteration.
+
+With the defaults (`redis_socket_timeout=5.0`, `redis_retry_count=3`,
+`lock_timeout=10.0`), a single cached call against a blackholed endpoint has been
+measured at **100.7 seconds**. It returned the correct value via `fail_open`, but a
+100-second cache lookup is indistinguishable from an outage to any caller with a
+deadline.
+
+`cache_deadline` bounds the total cache-attributable work in one decorated call:
+
+```python
+cachu.configure(cache_deadline=1.0)
+```
+
+Once the budget is spent, the remaining cache steps are skipped and the function runs
+uncached. Specifically:
+
+- The dogpile lock wait is clamped to whatever is left of the budget.
+- Reads, stat increments and the write are skipped once it is exhausted. Stats are
+  best-effort, so a cache thrashing under an exhausted budget reports no hits and no
+  misses.
+- **Time spent inside your function does not count.** A function slower than the
+  deadline is still cached; only cache work spends the budget.
+
+**`cache_deadline` alone is not enough for Redis.** The budget is only checked *between*
+steps, so a call already blocked in a socket read runs to completion - and redis-py puts
+its retries *inside* one operation:
+
+    worst case ~= cache_deadline + redis_socket_timeout * (1 + redis_retry_count)
+
+With the shipped defaults that second term is `5.0 * 4 = 20s`, so `cache_deadline=1.0`
+by itself still admits a 20-second call. cachu logs a warning when you configure a
+deadline the Redis budgets cannot honour. Set all three together:
+
+```python
+cachu.configure(
+    package='myapp.authz',
+    cache_deadline=1.0,
+    redis_socket_timeout=0.25,
+    redis_retry_count=1,
+)   # worst case ~= 1.0 + 0.5 = 1.5s
+```
+
+cachu deliberately does **not** derive `redis_socket_timeout` from `cache_deadline` for
+you. Doing so was measured to override an explicitly configured value and, against a
+healthy but slow endpoint, to time out every read and write - turning the cache into a
+100% miss that `fail_open` then hid. Choosing how much latency to trade for hit rate is
+yours to make.
+
+Two things still fall outside the budget: the one in-flight backend call above, and the
+mutex release in the `finally` (skipping that would leak the lock).
+
+### Dogpile and Lock Timeouts
+
+cachu suppresses dogpiles with a per-key mutex: on a miss, one caller computes and the
+rest wait, then read the value the winner stored.
+
+When a waiter cannot take the mutex within `lock_timeout`, the default
+`on_lock_timeout='run'` executes the function anyway. **Lowering `lock_timeout` to shed
+load therefore has the opposite effect** - each waiter that gives up becomes its own
+backing-store read. Measured with a 2.0s store and 6 concurrent same-key requests:
+
+| `lock_timeout` | `on_lock_timeout` | store reads | shed callers | p100 latency               |
+| -------------- | ----------------- | ----------- | ------------ | -------------------------- |
+| `10.0`         | `'run'` (default) | 1           | 0            | 2.00 s                     |
+| `1.0`          | `'run'`           | 6           | 0            | 3.00 s                     |
+| `1.0`          | `'raise'`         | 1           | 5            | 2.00 s winner, 1.00 s shed |
+
+Note the third row: `'raise'` sheds the five waiters at 1.00 s, but the lock winner
+still pays the full 2.00 s to populate the cache.
+
+To shed load instead of stampeding, opt into raising:
+
+```python
+cachu.configure(lock_timeout=1.0, on_lock_timeout='raise')
+
+try:
+    data = get_data(key)
+except cachu.CacheLockTimeout:
+    return SERVICE_BUSY
+```
+
+A waiter whose wait was rewarded still gets the value: the re-read after the lock
+attempt happens first, and only a genuine miss raises. A lock *error* under
+`fail_open=True` is not a lock timeout - it degrades to running without the lock, as
+before. But an exhausted `cache_deadline` **is** treated as not holding the lock, so
+`'raise'` sheds there too: the alternative would be to run the function without the
+lock, which is the stampede the setting exists to prevent.
+
+`CacheLockTimeout` subclasses `cachu.CacheError`. If you catch `CacheError` broadly and
+re-run the function yourself, exclude this one - otherwise you turn the shedding back
+into the stampede.
+
+### Bounding the Memory Backend
+
+The memory backend is unbounded by default and holds entries for the life of the
+process. Two settings bound it:
+
+```python
+cachu.configure(memory_maxsize=10_000, memory_sweep_interval=60.0)
+```
+
+- `memory_maxsize` evicts least-recently-used entries past the bound. Recency is
+  tracked on reads as well as writes.
+- `memory_sweep_interval` reclaims expired entries on an amortized schedule, so an entry
+  that expires and is never read again does not stay resident until process exit.
+
+Set `memory_maxsize` whenever the key space is influenced by callers - a credential
+hash, a tenant id, a search term - since otherwise the cache grows until restart.
+`memory_maxsize` defaults to the historical unbounded behaviour; the 60-second sweep is
+on by default.
+
+**Sweep cost.** A sweep is a single O(n) pass under the backend lock, so one caller per
+interval pays it. Measured on CPython 3.11: ~1 ms at 10,000 entries, ~20-55 ms at
+200,000. If that spike matters on your hot path, set `memory_maxsize` (which caps `n`,
+and therefore the sweep) or raise `memory_sweep_interval`.
+
+`MemoryBackend` also exposes `sweep()` / `asweep()` for an immediate reclaim, and
+`evictions` / `expired_swept` counters for monitoring. Reach the live instance through
+the manager, matching the decorator's `ttl` exactly:
+
+```python
+backend = cachu.get_backend('memory', ttl=300)   # -1 when the decorator's ttl is callable
+backend.sweep()
+print(backend.evictions, backend.expired_swept)
+```
+
+Both settings are read when the backend is **constructed**, on the first cached call.
+Setting them afterwards has no effect on the existing instance, so configure them at
+startup (or call `cachu.clear_backends()` to force reconstruction).
+
 ## Testing
 
 Disable caching globally for tests:
@@ -556,15 +820,48 @@ if cachu.is_disabled():
     print("Caching is disabled")
 ```
 
-## Async Support
+### Scoped Disabling
 
-The library provides full async/await support with matching APIs:
+`disable()` with no arguments is process-wide: a service with one optional cache and one
+load-bearing cache cannot switch off the first without silently switching off the
+second. Pass `package=` or `tag=` to narrow it:
 
 ```python
-from cachu import async_cache, async_cache_get, async_cache_set, async_cache_delete
+cachu.disable(package='myapp.docs')   # only that package's caches
+cachu.disable(tag='documents')        # only caches declared with tag='documents'
+
+cachu.enable(package='myapp.docs')    # lift one scope
+cachu.enable()                        # lift the global flag and every scope
+```
+
+Scopes are OR-ed: a cache is bypassed if either its package or its tag is disabled.
+`is_disabled(package, tag)` answers for a scope and `get_disabled_scopes()` returns a `DisabledScopes` snapshot with `.globally`,
+`.packages` and `.tags`.
+
+`package=` matches a cache's **resolved** package exactly - there is no prefix or
+dotted-scope matching. Auto-detection resolves to the top-level name, so
+`disable(package='myapp.docs')` only reaches caches declared with that exact
+`package=`. A single call registers both scopes independently:
+`disable(package='alpha', tag='docs')` switches off every cache in `alpha` *and* every
+cache tagged `docs` anywhere - it is not the intersection. To switch off one specific
+cache, use `backend='null'` on that decorator.
+
+A scoped `enable()` cannot lift a global `disable()`; call `enable()` with no arguments
+first.
+
+For a single function, `backend='null'` is usually clearer than any disable at all, and
+needs no teardown.
+
+## Async Support
+
+The library provides full async/await support with matching APIs. There is no separate
+async decorator: `@cache` detects a coroutine function and takes the async path.
+
+```python
+from cachu import cache, async_cache_get, async_cache_set, async_cache_delete
 from cachu import async_cache_clear, async_cache_info
 
-@async_cache(ttl=300, backend='memory')
+@cache(ttl=300, backend='memory')
 async def get_user(user_id: int) -> dict:
     return await fetch_from_database(user_id)
 
@@ -603,62 +900,130 @@ backend.delete('my_key')
 
 ### Redis Client Access
 
+`get_redis_client(url, ...)` builds a redis-py client with cachu's resilience settings
+applied. Pass your configured URL, or reuse the one cachu resolved for your package:
+
 ```python
+import cachu
 from cachu import get_redis_client
 
-client = get_redis_client()
+cfg = cachu.get_config()
+client = get_redis_client(
+    cfg.redis_url,
+    health_check_interval=cfg.redis_health_check_interval,
+    socket_timeout=cfg.redis_socket_timeout,
+    retry_count=cfg.redis_retry_count,
+)
 client.set('direct_key', 'value')
+```
+
+To reach the client cachu is already using, go through the backend instead:
+
+```python
+backend = cachu.get_backend('redis', ttl=300)
+backend.client.set('direct_key', 'value')
 ```
 
 ## Public API
 
 ```python
 from cachu import (
+    # Decorator (detects coroutine functions automatically)
+    cache,
+
     # Configuration
     configure,
     get_config,
     get_all_configs,
+    CacheConfig,
     disable,
     enable,
     is_disabled,
+    get_disabled_scopes,
+    DisabledScopes,
 
-    # Sync Decorator
-    cache,
-
-    # Sync CRUD Operations
+    # Sync CRUD operations
     cache_get,
     cache_set,
     cache_delete,
     cache_clear,
     cache_info,
 
-    # Async Decorator
-    async_cache,
-
-    # Async CRUD Operations
+    # Async CRUD operations
     async_cache_get,
     async_cache_set,
     async_cache_delete,
     async_cache_clear,
     async_cache_info,
 
-    # Advanced
-    get_backend,
-    get_async_backend,
-    get_redis_client,
+    # Statistics
+    get_cache_info,
+    get_async_cache_info,
+
+    # Exceptions
+    CacheError,
+    CacheLockTimeout,
+    ConfigurationError,
+    BackendNotFoundError,
+
+    # Constants
+    BACKENDS,
+
+    # Types
     Backend,
-    AsyncBackend,
+    CacheEntry,
+    CacheInfo,
+    CacheMeta,
+
+    # Advanced
+    backends,
+    presets,
+    get_backend,
+    aget_backend,
+    get_redis_client,
+    clear_backends,
     clear_async_backends,
 )
 ```
 
+## Upgrading to 0.4.0
+
+Everything new is additive and defaults to previous behaviour. Three changes are visible
+to existing code that is not modified.
+
+**`cache_clear` now reaches regions that have not been used yet.** It used to touch only
+backends already instantiated in this process, so a clear before the first cached call
+silently did nothing - and against a shared backend, served a stale value afterwards. It
+now instantiates the `(package, backend, ttl)` regions that `@cache` declared at import
+time. Consequences: a cold `cache_clear()` creates the SQLite file for any declared
+`backend='file'` region, and connects to any declared `backend='redis'` region, so
+against an unreachable Redis it now raises or spends the socket budget where it used to
+return `0` instantly. Scope the call - `cache_clear(backend='memory', ttl=300)` - if you
+do not want that.
+
+**The memory backend now sweeps expired entries every 60 s by default**
+(`memory_sweep_interval=60.0`). One caller per interval pays a single O(n) pass under
+the backend lock: ~1 ms at 10,000 entries, ~20-55 ms at 200,000. Set `memory_maxsize` to
+cap n, or raise `memory_sweep_interval`, if that spike matters on your hot path.
+
+**`RedisMutex.acquire(timeout=0)` now makes a single attempt** instead of falling back to
+the configured `lock_timeout`, matching `threading.Lock.acquire(timeout=0)`. This only
+affects code driving the mutex directly.
+
+Also worth knowing: `configure()` gained `package=` as its **last** parameter, so
+existing positional calls are unaffected; Redis writes moved from `SETEX` to `SET ... EX`
+(wire-identical, silences a redis-py 8.x `DeprecationWarning`); `configure()` now raises
+`ConfigurationError`, a subclass of both `CacheError` and `ValueError`, so existing
+`except ValueError` handlers keep working; and the unused `func-timeout` runtime
+dependency was dropped, leaving cachu dependency-free apart from its extras.
+
 ## Features
 
 - **Multiple backends**: Memory, file (SQLite), Redis, and null (passthrough)
-- **Async support**: Full async/await API with `@async_cache` decorator
+- **Async support**: Full async/await API; `@cache` detects coroutine functions
 - **Flexible TTL**: Static or dynamic TTL (callable that receives result, optionally with call args)
 - **Tags**: Organize and selectively clear cache entries
-- **Package isolation**: Each package gets isolated configuration
+- **Package isolation**: Each package gets isolated configuration, settable by name
 - **Conditional caching**: Cache based on result value and/or call args
 - **Args-aware predicates**: `ttl`, `cache_if`, and `validate` accept a 2-arg `(value, args)` form
 - **Presets**: Composable bundles for common patterns (e.g. `today_aware` for date-keyed fetches)
@@ -667,5 +1032,10 @@ from cachu import (
 - **Helper methods**: `.get()`, `.set()`, `.clear()`, `.refresh()`, `.original()` on decorated functions
 - **Statistics**: Track hits, misses, and cache size
 - **Intelligent filtering**: Auto-excludes `self`, `cls`, connections, and `_` params
-- **Global disable**: Bypass all caching for testing
+- **Fail-open by default**: Backend, mutex, read, write and stat faults degrade to a miss
+- **Bounded latency**: `cache_deadline` caps cache-attributable time per call
+- **Load shedding**: `on_lock_timeout='raise'` sheds waiters instead of stampeding
+- **Bounded memory**: Optional LRU `memory_maxsize` plus amortized expiry sweeps
+- **Scoped disable**: Bypass caching globally, or by package or tag
+- **Cold-process clearing**: `cache_clear` reaches regions declared but not yet used
 - **Redis TLS**: Supports `rediss://` URLs for secure connections

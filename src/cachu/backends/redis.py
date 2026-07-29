@@ -187,13 +187,18 @@ class RedisBackend(Backend):
 
     def set(self, key: str, value: Any, ttl: int) -> None:
         """Set value with TTL in seconds. A non-positive TTL is not cached.
+
+        Notes
+        -----
+        - Uses SET ... EX rather than SETEX: redis-py 8.x deprecates setex in
+          favour of set(ex=...), and the wire semantics are identical.
         """
         if ttl <= 0:
             self.client.delete(key)
             return
         now = time.time()
         packed = _pack_value(value, now)
-        self.client.setex(key, ttl, packed)
+        self.client.set(key, packed, ex=ttl)
 
     def delete(self, key: str) -> None:
         """Delete value by key.
@@ -293,6 +298,11 @@ class RedisBackend(Backend):
 
     async def aset(self, key: str, value: Any, ttl: int) -> None:
         """Async set value with TTL in seconds. A non-positive TTL is not cached.
+
+        Notes
+        -----
+        - Uses SET ... EX rather than SETEX: redis-py 8.x deprecates setex in
+          favour of set(ex=...), and the wire semantics are identical.
         """
         client = self._get_async_client()
         if ttl <= 0:
@@ -300,7 +310,7 @@ class RedisBackend(Backend):
             return
         now = time.time()
         packed = _pack_value(value, now)
-        await client.setex(key, ttl, packed)
+        await client.set(key, packed, ex=ttl)
 
     async def adelete(self, key: str) -> None:
         """Async delete value by key.

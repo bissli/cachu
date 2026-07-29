@@ -5,7 +5,7 @@ from collections.abc import Callable
 from typing import Any
 
 from .api import NO_VALUE, CacheInfo, CacheMeta
-from .config import _get_caller_package, get_config
+from .config import VALID_BACKENDS, _get_caller_package, get_config
 from .decorator import get_async_cache_info, get_cache_info
 from .manager import manager
 from .util import _tag_to_pattern, mangle_key
@@ -22,6 +22,45 @@ def _get_meta(fn: Callable[..., Any], decorator_name: str = '@cache') -> CacheMe
     if meta is None:
         raise ValueError(f'{fn.__name__} is not decorated with {decorator_name}')
     return meta
+
+
+def _clear_targets(
+    tag: str | None,
+    backend: str | None,
+    package: str | None,
+    global_clear: bool,
+) -> tuple[str | None, list[str], str | None]:
+    """Resolve what a clear should act on, shared by the sync and async paths.
+
+    Parameters
+    ----------
+    tag : str or None
+        Tag to scope the key glob to.
+    backend : str or None
+        Single backend name, or None for every shipped backend.
+    package : str or None
+        Package to clear for; auto-detected from the caller when None.
+    global_clear : bool
+        Skip key_prefix scoping.
+
+    Returns
+    -------
+    tuple
+        (key glob or None, backend names to visit, resolved package).
+    """
+    if package is None:
+        package = _get_caller_package()
+
+    backend_types = [backend] if backend is not None else list(VALID_BACKENDS)
+
+    pattern = _tag_to_pattern(tag)
+    if not global_clear:
+        cfg = get_config(package)
+        if cfg.key_prefix:
+            prefix_glob = f'*:{cfg.key_prefix}*'
+            pattern = f'{prefix_glob[:-1]}{pattern}' if pattern else prefix_glob
+
+    return pattern, backend_types, package
 
 
 def cache_get(fn: Callable[..., Any], default: Any = _MISSING, **kwargs: Any) -> Any:
@@ -113,34 +152,44 @@ def cache_clear(
 ) -> int:
     """Clear cache entries matching criteria.
 
-    Args:
-        tag: Clear only entries with this tag
-        backend: Backend type to clear ('memory', 'file', 'redis'). Clears all if None.
-        ttl: Specific TTL region to clear. Clears all TTLs if None.
-        package: Package to clear for. Auto-detected if None.
-        global_clear: If True, skip key_prefix scoping and clear all keys.
+    Parameters
+    ----------
+    tag : str or None, default None
+        Clear only entries carrying this tag.
+    backend : str or None, default None
+        Backend type to clear: 'memory', 'file', 'redis' or 'null'. All
+        backends if None.
+    ttl : int or None, default None
+        Specific TTL region to clear. All TTL regions if None.
+    package : str or None, default None
+        Package to clear for. Auto-detected from the caller if None.
+    global_clear : bool, default False
+        Skip key_prefix scoping and clear all matching keys.
 
     Returns
-        Number of entries cleared (may be approximate)
+    -------
+    int
+        Number of entries cleared, which may be approximate.
+
+    Notes
+    -----
+    - @cache registers its (package, backend, ttl) region at decoration
+      time, so this call materializes the matching regions and clears them
+      even in a cold process where no decorated call has run yet.
+    - A setup fixture that clears before any cached call therefore really
+      clears a shared backend instead of silently no-opping and letting a
+      previous run's value be served.
+    - A return of 0 means "no entries matched". When no region matched at
+      all - usually a package or backend name that does not exist - a
+      warning is logged, since the two cases are otherwise
+      indistinguishable.
+    - A clear failure propagates. Unlike the decorated call path this is
+      not governed by `fail_open`: clearing is an administrative operation
+      whose whole purpose is the side effect, so a silent failure would be
+      worse than a loud one.
     """
-    if package is None:
-        package = _get_caller_package()
-
-    if backend is not None:
-        backends_to_clear = [backend]
-    else:
-        backends_to_clear = ['memory', 'file', 'redis', 'null']
-
-    pattern = _tag_to_pattern(tag)
-    if not global_clear:
-        cfg = get_config(package)
-        if cfg.key_prefix:
-            prefix_glob = f'*:{cfg.key_prefix}*'
-            if pattern:
-                pattern = f'{prefix_glob[:-1]}{pattern}'
-            else:
-                pattern = prefix_glob
-
+    pattern, backend_types, package = _clear_targets(
+        tag, backend, package, global_clear)
     total_cleared = 0
 
     if backend is not None and ttl is not None:
@@ -150,17 +199,23 @@ def cache_clear(
         if cleared > 0:
             total_cleared += cleared
             logger.debug(f'Cleared {cleared} entries from {backend} backend (ttl={ttl})')
-    else:
-        for (pkg, btype, bttl), backend_instance in manager.iter_backends(
-            package,
-            backend_types=backends_to_clear,
-            ttl=ttl,
-        ):
-            cleared = backend_instance.clear(pattern)
-            backend_instance.clear_stats()
-            if cleared > 0:
-                total_cleared += cleared
-                logger.debug(f'Cleared {cleared} entries from {btype} backend (ttl={bttl})')
+        return total_cleared
+
+    manager.materialize(package, backend_types, ttl)
+    targets = list(manager.iter_backends(
+        package, backend_types=backend_types, ttl=ttl))
+
+    for (_pkg, btype, bttl), backend_instance in targets:
+        cleared = backend_instance.clear(pattern)
+        backend_instance.clear_stats()
+        if cleared > 0:
+            total_cleared += cleared
+            logger.debug(f'Cleared {cleared} entries from {btype} backend (ttl={bttl})')
+
+    if not targets:
+        logger.warning(
+            f'cache_clear found no cache region for package={package!r}, '
+            f'backend={backend!r}, ttl={ttl!r}; nothing was cleared')
 
     return total_cleared
 
@@ -274,34 +329,35 @@ async def async_cache_clear(
 ) -> int:
     """Clear async cache entries matching criteria.
 
-    Args:
-        tag: Clear only entries with this tag
-        backend: Backend type to clear ('memory', 'file', 'redis'). Clears all if None.
-        ttl: Specific TTL region to clear. Clears all TTLs if None.
-        package: Package to clear for. Auto-detected if None.
-        global_clear: If True, skip key_prefix scoping and clear all keys.
+    Parameters
+    ----------
+    tag : str or None, default None
+        Clear only entries carrying this tag.
+    backend : str or None, default None
+        Backend type to clear: 'memory', 'file', 'redis' or 'null'. All
+        backends if None.
+    ttl : int or None, default None
+        Specific TTL region to clear. All TTL regions if None.
+    package : str or None, default None
+        Package to clear for. Auto-detected from the caller if None.
+    global_clear : bool, default False
+        Skip key_prefix scoping and clear all matching keys.
 
     Returns
-        Number of entries cleared (may be approximate)
+    -------
+    int
+        Number of entries cleared, which may be approximate.
+
+    Notes
+    -----
+    - Like `cache_clear`, this materializes the @cache-declared regions
+      matching its arguments, so it works in a cold process.
+    - A return of 0 means "no entries matched"; a warning is logged when no
+      region matched at all.
+    - A clear failure propagates rather than following `fail_open`.
     """
-    if package is None:
-        package = _get_caller_package()
-
-    if backend is not None:
-        backends_to_clear = [backend]
-    else:
-        backends_to_clear = ['memory', 'file', 'redis', 'null']
-
-    pattern = _tag_to_pattern(tag)
-    if not global_clear:
-        cfg = get_config(package)
-        if cfg.key_prefix:
-            prefix_glob = f'*:{cfg.key_prefix}*'
-            if pattern:
-                pattern = f'{prefix_glob[:-1]}{pattern}'
-            else:
-                pattern = prefix_glob
-
+    pattern, backend_types, package = _clear_targets(
+        tag, backend, package, global_clear)
     total_cleared = 0
 
     if backend is not None and ttl is not None:
@@ -311,17 +367,28 @@ async def async_cache_clear(
         if cleared > 0:
             total_cleared += cleared
             logger.debug(f'Cleared {cleared} entries from {backend} backend (ttl={ttl})')
-    else:
-        async for (pkg, btype, bttl), backend_instance in manager.aiter_backends(
+        return total_cleared
+
+    await manager.amaterialize(package, backend_types, ttl)
+    targets = [
+        item async for item in manager.aiter_backends(
             package,
-            backend_types=backends_to_clear,
+            backend_types=backend_types,
             ttl=ttl,
-        ):
-            cleared = await backend_instance.aclear(pattern)
-            await backend_instance.aclear_stats()
-            if cleared > 0:
-                total_cleared += cleared
-                logger.debug(f'Cleared {cleared} entries from {btype} backend (ttl={bttl})')
+        )
+    ]
+
+    for (_pkg, btype, bttl), backend_instance in targets:
+        cleared = await backend_instance.aclear(pattern)
+        await backend_instance.aclear_stats()
+        if cleared > 0:
+            total_cleared += cleared
+            logger.debug(f'Cleared {cleared} entries from {btype} backend (ttl={bttl})')
+
+    if not targets:
+        logger.warning(
+            f'async_cache_clear found no cache region for package={package!r}, '
+            f'backend={backend!r}, ttl={ttl!r}; nothing was cleared')
 
     return total_cleared
 

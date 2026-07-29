@@ -21,19 +21,23 @@ site.addsitedir(HERE)
 
 
 def _clear_all_backends() -> None:
-    """Clear all backend instances (internal test helper).
+    """Clear all backend instances and declared regions (internal test helper).
+
+    Regions are registered at decoration time and are meant to outlive backend
+    instances, which is what makes a cold cache_clear work. Test functions
+    declare their decorators inline, so regions must be dropped between tests
+    or one test's region is materialized and cleared by the next.
     """
     from cachu.manager import manager
     from cachu.mutex import AsyncioMutex, ThreadingMutex
 
-    with manager._sync_lock:
-        for backend in manager.backends.values():
-            try:
-                backend.close()
-            except Exception:
-                pass
-        manager.backends.clear()
+    for backend in manager._detach():
+        try:
+            backend.close()
+        except Exception:
+            pass
 
+    manager.clear_regions()
     ThreadingMutex.clear_locks()
     AsyncioMutex.clear_locks()
 

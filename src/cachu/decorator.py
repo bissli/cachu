@@ -2,12 +2,15 @@
 """
 import asyncio
 import logging
+import time
 from collections.abc import Callable
 from functools import wraps
 from typing import Any
 
 from .api import NO_VALUE, CacheInfo, CacheMeta
-from .config import VALID_BACKENDS, _get_caller_package, get_config, is_disabled
+from .config import VALID_BACKENDS, _get_caller_package, get_config
+from .config import is_disabled
+from .exception import CacheLockTimeout
 from .manager import manager
 from .util import _is_connection_like, _predicate_arity, make_key_generator
 from .util import make_partial_pattern, mangle_key, validate_entry
@@ -15,6 +18,52 @@ from .util import make_partial_pattern, mangle_key, validate_entry
 logger = logging.getLogger(__name__)
 
 _MISSING = object()
+
+
+def _budget_spent(started: float | None, deadline: float | None) -> bool:
+    """Report whether the per-call cache budget is exhausted.
+
+    Parameters
+    ----------
+    started : float or None
+        `time.monotonic()` origin of the budget, or None when unbounded.
+    deadline : float or None
+        Seconds of cache work allowed, or None when unbounded.
+
+    Returns
+    -------
+    bool
+        True only when a deadline is configured and it has elapsed.
+    """
+    if started is None or deadline is None:
+        return False
+    return (time.monotonic() - started) >= deadline
+
+
+def _remaining_lock_wait(
+    lock_timeout: float,
+    started: float | None,
+    deadline: float | None,
+) -> float:
+    """Clamp the dogpile lock wait to whatever is left of the cache budget.
+
+    Returns
+    -------
+    float
+        `lock_timeout` when unbounded, otherwise the smaller of `lock_timeout`
+        and the remaining budget, floored at 0.
+
+    Notes
+    -----
+    - A return below `lock_timeout` means the deadline, not contention, is
+      what ends the wait. The caller still treats a failed acquire as a
+      reason to shed under `on_lock_timeout='raise'`: both causes lead to
+      the same outcome - running the function without the lock - which is
+      exactly what that setting exists to prevent.
+    """
+    if started is None or deadline is None:
+        return lock_timeout
+    return max(0.0, min(lock_timeout, deadline - (time.monotonic() - started)))
 
 
 async def _safe_aget(
@@ -69,6 +118,71 @@ def _safe_incr_stat(backend_inst: Any, fn_name: str, stat: str) -> None:
         logger.warning(f'Cache stat update failed for {fn_name!r}', exc_info=True)
 
 
+def _should_cache(
+    result: Any,
+    args_dict: dict[str, Any],
+    cache_if: Callable[..., bool] | None,
+    arity: int,
+) -> bool:
+    """Decide whether a fresh result should be written to the cache.
+
+    Parameters
+    ----------
+    result : Any
+        Value the decorated function returned.
+    args_dict : dict
+        Filtered args view, the same one used to build the cache key.
+    cache_if : Callable or None
+        Caller predicate; None means always cache.
+    arity : int
+        1 for `cache_if(result)`, 2 for `cache_if(result, args)`.
+
+    Returns
+    -------
+    bool
+        True when the write should proceed.
+    """
+    if cache_if is None:
+        return True
+    if arity == 2:
+        return cache_if(result, args_dict)
+    return cache_if(result)
+
+
+def _resolve_ttl(
+    ttl: int | Callable[..., int],
+    result: Any,
+    args_dict: dict[str, Any],
+    is_callable: bool,
+    arity: int,
+) -> int:
+    """Resolve a static or callable ttl for one write.
+
+    Parameters
+    ----------
+    ttl : int or Callable
+        The decorator's ttl argument.
+    result : Any
+        Value the decorated function returned.
+    args_dict : dict
+        Filtered args view, the same one used to build the cache key.
+    is_callable : bool
+        Whether `ttl` is a callable, decided once at decoration time.
+    arity : int
+        1 for `ttl(result)`, 2 for `ttl(result, args)`.
+
+    Returns
+    -------
+    int
+        TTL in seconds for this write.
+    """
+    if not is_callable:
+        return ttl
+    if arity == 2:
+        return ttl(result, args_dict)
+    return ttl(result)
+
+
 def cache(
     ttl: int | Callable[..., int] = 300,
     backend: str | None = None,
@@ -80,71 +194,96 @@ def cache(
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     """Universal cache decorator for sync and async functions.
 
-    Automatically detects async functions and uses appropriate code path.
-    Includes dogpile prevention using per-key mutexes.
+    Coroutine functions are detected automatically and take the async code
+    path. Dogpiles are suppressed with a per-key mutex.
 
-    Args:
-        ttl: Time-to-live in seconds (default: 300). Can also be a callable.
-             Legacy form `ttl(result)` receives the function result and returns
-             a TTL. Two-arg form `ttl(result, args)` additionally receives the
-             filtered args dict (same view used for the cache key, with
-             self/cls/_-prefixed/excluded/connection-like values dropped).
-        backend: Backend type ('memory', 'file', 'redis'). Uses config default if None.
-        tag: Tag for grouping related cache entries
-        exclude: Parameter names to exclude from cache key
-        cache_if: Predicate that decides whether a fresh result should be
-                  written to the cache. Legacy form `cache_if(result)` or
-                  two-arg form `cache_if(result, args)`. Returning False
-                  bypasses the write; concurrent callers will each re-fetch.
-        validate: Predicate that decides whether a cached entry is still
-                  usable on hit. Legacy form `validate(entry)` or two-arg
-                  form `validate(entry, args)`. Return False to recompute.
-        package: Package name for config isolation. Auto-detected from the
-                 calling module's top-level package if None. Use explicit
-                 values when code may be vendored or bundled into other
-                 packages.
+    Parameters
+    ----------
+    ttl : int or Callable, default 300
+        Time-to-live in seconds, or a callable computing one. Legacy form
+        `ttl(result)` receives the function result; two-arg form
+        `ttl(result, args)` also receives the filtered args dict (the same
+        view used for the cache key, with self/cls/_-prefixed/excluded/
+        connection-like values dropped).
+    backend : str or None, default None
+        'memory', 'file', 'redis' or 'null'; the configured default if None.
+        'null' never stores anything, so it switches off one cache without
+        the process-wide `disable()`.
+    tag : str, default ''
+        Tag grouping related entries for selective clearing. Also the unit
+        that `cachu.disable(tag=...)` switches off.
+    exclude : set of str or None, default None
+        Parameter names to leave out of the cache key.
+    cache_if : Callable or None, default None
+        Predicate deciding whether a fresh result is written. Legacy form
+        `cache_if(result)` or two-arg `cache_if(result, args)`. Returning
+        False bypasses the write, so concurrent callers each re-fetch.
+    validate : Callable or None, default None
+        Predicate deciding whether a cached entry is still usable on hit.
+        Legacy form `validate(entry)` or two-arg `validate(entry, args)`.
+        Return False to recompute.
+    package : str or None, default None
+        Package name selecting the configuration scope. Auto-detected from
+        the calling module's top-level package if None; pass it explicitly
+        when the code may be vendored or bundled into another package.
 
-    Per-call control via reserved kwargs (not passed to function):
-        _skip_cache: If True, bypass cache completely for this call
-        _overwrite_cache: If True, execute function and overwrite cached value
+    Returns
+    -------
+    Callable
+        Decorator wrapping a sync or async function with caching.
 
-    Example:
-        @cache(ttl=300, tag='users')
-        def get_user(user_id: int) -> dict:
-            return fetch_user(user_id)
+    Notes
+    -----
+    - Two reserved kwargs are consumed by the wrapper and never reach the
+      function: `_skip_cache=True` bypasses the cache for that call, and
+      `_overwrite_cache=True` executes and overwrites the stored value.
+    - With `fail_open=True` (default) no cache fault reaches the caller:
+      backend construction, mutex creation, reads and lock acquisition all
+      degrade to running the function uncached.
+    - `fail_open=False` propagates those faults instead.
+    - Writes, stat updates and lock release are always best-effort and are
+      logged rather than raised, whichever way `fail_open` is set: they run
+      after the result already exists, so failing the call would discard a
+      correct answer for a cache-only problem.
+    - `fail_open` bounds exceptions, not hangs. A wedged Redis endpoint
+      blocks inside socket timeouts and never raises; bound that with the
+      `cache_deadline` setting.
+    - A lock timeout runs the function by default, so N waiters become N
+      backend reads. Set `on_lock_timeout='raise'` to shed load instead.
+      That raise is intentional and fires even under `fail_open=True`,
+      because shedding load is a decision rather than a fault.
 
-        @cache(ttl=300, tag='users')
-        async def get_user_async(user_id: int) -> dict:
-            return await fetch_user(user_id)
+    Examples
+    --------
+    >>> @cache(ttl=300, tag='users')
+    ... def get_user(user_id: int) -> dict:
+    ...     return fetch_user(user_id)
 
-        # Dynamic TTL based on result
-        @cache(ttl=lambda result: result.get('cache_seconds', 300))
-        def get_config(key: str) -> dict:
-            return fetch_config(key)
+    >>> @cache(ttl=300, tag='users')
+    ... async def get_user_async(user_id: int) -> dict:
+    ...     return await fetch_user(user_id)
 
-        # Args-aware TTL: short for today, long for past
-        import datetime
-        @cache(ttl=lambda result, args: 900 if args['date'] == datetime.date.today() else 86400)
-        def get_filings(date): ...
+    Dynamic TTL taken from the result:
 
-        # Args-aware cache_if: skip empty for today, cache empty for past
-        @cache(cache_if=lambda result, args: bool(result) or args['date'] != datetime.date.today())
-        def get_filings(date): ...
+    >>> @cache(ttl=lambda result: result.get('cache_seconds', 300))
+    ... def get_settings(key: str) -> dict:
+    ...     return fetch_settings(key)
 
-        # Normal call
-        user = get_user(123)
+    Args-aware TTL and cache_if, short for today and long for past dates:
 
-        # Skip cache
-        user = get_user(123, _skip_cache=True)
+    >>> @cache(ttl=lambda r, a: 900 if a['date'] == today() else 86400)
+    ... def get_filings(date): ...
 
-        # Force refresh
-        user = get_user(123, _overwrite_cache=True)
+    >>> @cache(cache_if=lambda r, a: bool(r) or a['date'] != today())
+    ... def get_filings(date): ...
 
-        # Clear specific entry
-        get_user.clear(user_id=123)
+    Per-call control and helper methods:
 
-        # Refresh specific entry
-        user = get_user.refresh(user_id=123)
+    >>> user = get_user(123)
+    >>> user = get_user(123, _skip_cache=True)
+    >>> user = get_user(123, _overwrite_cache=True)
+    >>> get_user.clear(user_id=123)
+    >>> user = get_user.refresh(user_id=123)
     """
     ttl_is_callable = callable(ttl)
     ttl_for_backend = -1 if ttl_is_callable else ttl
@@ -166,6 +305,7 @@ def cache(
         logger.debug(
             f'@cache {fn.__name__}: package={resolved_package!r}, '
             f'backend={resolved_backend!r}, ttl={ttl_for_backend}')
+        manager.register_region(resolved_package, resolved_backend, ttl_for_backend)
         key_generator = make_key_generator(fn, tag, exclude)
         fn_name = getattr(fn, '__wrapped__', fn).__name__
         is_async = asyncio.iscoroutinefunction(fn)
@@ -187,72 +327,115 @@ def cache(
                 skip_cache = kwargs.pop('_skip_cache', False)
                 overwrite_cache = kwargs.pop('_overwrite_cache', False)
 
-                if is_disabled() or skip_cache:
+                if skip_cache or is_disabled(resolved_package, tag):
                     return await fn(*args, **kwargs)
 
-                backend_inst = await manager.aget_backend(
-                    resolved_package,
-                    resolved_backend,
-                    ttl_for_backend,
-                )
                 cfg = get_config(resolved_package)
-
-                base_key, args_dict = key_generator(*args, **kwargs)
-                cache_key = mangle_key(base_key, cfg.key_prefix, ttl_for_backend)
                 fail_open = cfg.fail_open
+                deadline = cfg.cache_deadline
+                started = time.monotonic() if deadline is not None else None
 
-                if not overwrite_cache:
+                try:
+                    backend_inst = await manager.aget_backend(
+                        resolved_package,
+                        resolved_backend,
+                        ttl_for_backend,
+                    )
+                except Exception:
+                    if not fail_open:
+                        raise
+                    logger.warning(
+                        f'Cache backend unavailable for {fn.__name__!r}; '
+                        f'running uncached', exc_info=True)
+                    return await fn(*args, **kwargs)
+
+                try:
+                    base_key, args_dict = key_generator(*args, **kwargs)
+                except Exception:
+                    if not fail_open:
+                        raise
+                    logger.warning(
+                        f'Cache key generation failed for {fn.__name__!r}; '
+                        f'running uncached', exc_info=True)
+                    return await fn(*args, **kwargs)
+                cache_key = mangle_key(base_key, cfg.key_prefix, ttl_for_backend)
+
+                if not overwrite_cache and not _budget_spent(started, deadline):
                     value, created_at = await _safe_aget(
                         backend_inst, cache_key, fail_open, fn.__name__)
 
                     if value is not NO_VALUE and validate_entry(
                             value, created_at, validate, args_dict, validate_arity):
-                        await _safe_aincr_stat(backend_inst, fn.__name__, 'hits')
+                        if not _budget_spent(started, deadline):
+                            await _safe_aincr_stat(backend_inst, fn.__name__, 'hits')
                         return value
 
-                mutex = backend_inst.get_async_mutex(cache_key)
                 try:
-                    acquired = await mutex.acquire(timeout=cfg.lock_timeout)
+                    mutex = backend_inst.get_async_mutex(cache_key)
                 except Exception:
                     if not fail_open:
                         raise
                     logger.warning(
-                        f'Cache lock acquire failed for {fn.__name__!r}; '
+                        f'Cache mutex unavailable for {fn.__name__!r}; '
                         f'proceeding without lock', exc_info=True)
-                    acquired = False
+                    mutex = None
+
+                acquired = False
+                lock_faulted = False
+                if mutex is not None and not _budget_spent(started, deadline):
+                    lock_wait = _remaining_lock_wait(
+                        cfg.lock_timeout, started, deadline)
+                    try:
+                        acquired = await mutex.acquire(timeout=lock_wait)
+                    except Exception:
+                        if not fail_open:
+                            raise
+                        lock_faulted = True
+                        logger.warning(
+                            f'Cache lock acquire failed for {fn.__name__!r}; '
+                            f'proceeding without lock', exc_info=True)
                 try:
-                    if not overwrite_cache:
+                    if not overwrite_cache and not _budget_spent(started, deadline):
                         value, created_at = await _safe_aget(
                             backend_inst, cache_key, fail_open, fn.__name__)
                         if value is not NO_VALUE and validate_entry(
                                 value, created_at, validate, args_dict, validate_arity):
-                            await _safe_aincr_stat(backend_inst, fn.__name__, 'hits')
+                            if not _budget_spent(started, deadline):
+                                await _safe_aincr_stat(backend_inst, fn.__name__, 'hits')
                             return value
 
-                    await _safe_aincr_stat(backend_inst, fn.__name__, 'misses')
+                    if (mutex is not None and not acquired and not lock_faulted
+                            and cfg.on_lock_timeout == 'raise'):
+                        raise CacheLockTimeout(
+                            f'Did not acquire the cache lock for '
+                            f'{fn.__name__!r} and on_lock_timeout is "raise"; '
+                            f'shedding rather than running the function')
+
+                    if not _budget_spent(started, deadline):
+                        await _safe_aincr_stat(backend_inst, fn.__name__, 'misses')
+
+                    fn_started = time.monotonic()
                     result = await fn(*args, **kwargs)
+                    if started is not None:
+                        started += time.monotonic() - fn_started
 
-                    if cache_if is None:
-                        should_cache = True
-                    elif cache_if_arity == 2:
-                        should_cache = cache_if(result, args_dict)
-                    else:
-                        should_cache = cache_if(result)
+                    if not _should_cache(result, args_dict, cache_if, cache_if_arity):
+                        return result
 
-                    if should_cache:
-                        if not ttl_is_callable:
-                            resolved_ttl = ttl
-                        elif ttl_arity == 2:
-                            resolved_ttl = ttl(result, args_dict)
-                        else:
-                            resolved_ttl = ttl(result)
-                        try:
-                            await backend_inst.aset(cache_key, result, resolved_ttl)
-                            logger.debug(f'Cached {fn.__name__} with key {cache_key}')
-                        except Exception:
-                            logger.warning(
-                                f'Cache set failed for {fn.__name__}',
-                                exc_info=True)
+                    if _budget_spent(started, deadline):
+                        logger.warning(
+                            f'Cache write skipped for {fn.__name__!r}: '
+                            f'cache_deadline of {deadline}s exhausted')
+                        return result
+
+                    resolved_ttl = _resolve_ttl(
+                        ttl, result, args_dict, ttl_is_callable, ttl_arity)
+                    try:
+                        await backend_inst.aset(cache_key, result, resolved_ttl)
+                        logger.debug(f'Cached {fn.__name__} with key {cache_key}')
+                    except Exception:
+                        logger.warning(
+                            f'Cache set failed for {fn.__name__}', exc_info=True)
 
                     return result
                 finally:
@@ -278,68 +461,112 @@ def cache(
                 skip_cache = kwargs.pop('_skip_cache', False)
                 overwrite_cache = kwargs.pop('_overwrite_cache', False)
 
-                if is_disabled() or skip_cache:
+                if skip_cache or is_disabled(resolved_package, tag):
                     return fn(*args, **kwargs)
 
-                backend_inst = manager.get_backend(resolved_package, resolved_backend, ttl_for_backend)
                 cfg = get_config(resolved_package)
-
-                base_key, args_dict = key_generator(*args, **kwargs)
-                cache_key = mangle_key(base_key, cfg.key_prefix, ttl_for_backend)
                 fail_open = cfg.fail_open
+                deadline = cfg.cache_deadline
+                started = time.monotonic() if deadline is not None else None
 
-                if not overwrite_cache:
+                try:
+                    backend_inst = manager.get_backend(
+                        resolved_package, resolved_backend, ttl_for_backend)
+                except Exception:
+                    if not fail_open:
+                        raise
+                    logger.warning(
+                        f'Cache backend unavailable for {fn.__name__!r}; '
+                        f'running uncached', exc_info=True)
+                    return fn(*args, **kwargs)
+
+                try:
+                    base_key, args_dict = key_generator(*args, **kwargs)
+                except Exception:
+                    if not fail_open:
+                        raise
+                    logger.warning(
+                        f'Cache key generation failed for {fn.__name__!r}; '
+                        f'running uncached', exc_info=True)
+                    return fn(*args, **kwargs)
+                cache_key = mangle_key(base_key, cfg.key_prefix, ttl_for_backend)
+
+                if not overwrite_cache and not _budget_spent(started, deadline):
                     value, created_at = _safe_get(
                         backend_inst, cache_key, fail_open, fn.__name__)
 
                     if value is not NO_VALUE and validate_entry(
                             value, created_at, validate, args_dict, validate_arity):
-                        _safe_incr_stat(backend_inst, fn.__name__, 'hits')
+                        if not _budget_spent(started, deadline):
+                            _safe_incr_stat(backend_inst, fn.__name__, 'hits')
                         return value
 
-                mutex = backend_inst.get_mutex(cache_key)
                 try:
-                    acquired = mutex.acquire(timeout=cfg.lock_timeout)
+                    mutex = backend_inst.get_mutex(cache_key)
                 except Exception:
                     if not fail_open:
                         raise
                     logger.warning(
-                        f'Cache lock acquire failed for {fn.__name__!r}; '
+                        f'Cache mutex unavailable for {fn.__name__!r}; '
                         f'proceeding without lock', exc_info=True)
-                    acquired = False
+                    mutex = None
+
+                acquired = False
+                lock_faulted = False
+                if mutex is not None and not _budget_spent(started, deadline):
+                    lock_wait = _remaining_lock_wait(
+                        cfg.lock_timeout, started, deadline)
+                    try:
+                        acquired = mutex.acquire(timeout=lock_wait)
+                    except Exception:
+                        if not fail_open:
+                            raise
+                        lock_faulted = True
+                        logger.warning(
+                            f'Cache lock acquire failed for {fn.__name__!r}; '
+                            f'proceeding without lock', exc_info=True)
                 try:
-                    if not overwrite_cache:
+                    if not overwrite_cache and not _budget_spent(started, deadline):
                         value, created_at = _safe_get(
                             backend_inst, cache_key, fail_open, fn.__name__)
                         if value is not NO_VALUE and validate_entry(
                                 value, created_at, validate, args_dict, validate_arity):
-                            _safe_incr_stat(backend_inst, fn.__name__, 'hits')
+                            if not _budget_spent(started, deadline):
+                                _safe_incr_stat(backend_inst, fn.__name__, 'hits')
                             return value
 
-                    _safe_incr_stat(backend_inst, fn.__name__, 'misses')
+                    if (mutex is not None and not acquired and not lock_faulted
+                            and cfg.on_lock_timeout == 'raise'):
+                        raise CacheLockTimeout(
+                            f'Did not acquire the cache lock for '
+                            f'{fn.__name__!r} and on_lock_timeout is "raise"; '
+                            f'shedding rather than running the function')
+
+                    if not _budget_spent(started, deadline):
+                        _safe_incr_stat(backend_inst, fn.__name__, 'misses')
+
+                    fn_started = time.monotonic()
                     result = fn(*args, **kwargs)
+                    if started is not None:
+                        started += time.monotonic() - fn_started
 
-                    if cache_if is None:
-                        should_cache = True
-                    elif cache_if_arity == 2:
-                        should_cache = cache_if(result, args_dict)
-                    else:
-                        should_cache = cache_if(result)
+                    if not _should_cache(result, args_dict, cache_if, cache_if_arity):
+                        return result
 
-                    if should_cache:
-                        if not ttl_is_callable:
-                            resolved_ttl = ttl
-                        elif ttl_arity == 2:
-                            resolved_ttl = ttl(result, args_dict)
-                        else:
-                            resolved_ttl = ttl(result)
-                        try:
-                            backend_inst.set(cache_key, result, resolved_ttl)
-                            logger.debug(f'Cached {fn.__name__} with key {cache_key}')
-                        except Exception:
-                            logger.warning(
-                                f'Cache set failed for {fn.__name__}',
-                                exc_info=True)
+                    if _budget_spent(started, deadline):
+                        logger.warning(
+                            f'Cache write skipped for {fn.__name__!r}: '
+                            f'cache_deadline of {deadline}s exhausted')
+                        return result
+
+                    resolved_ttl = _resolve_ttl(
+                        ttl, result, args_dict, ttl_is_callable, ttl_arity)
+                    try:
+                        backend_inst.set(cache_key, result, resolved_ttl)
+                        logger.debug(f'Cached {fn.__name__} with key {cache_key}')
+                    except Exception:
+                        logger.warning(
+                            f'Cache set failed for {fn.__name__}', exc_info=True)
 
                     return result
                 finally:

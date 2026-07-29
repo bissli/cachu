@@ -6,9 +6,7 @@ readme = "README.md"
 license = "0BSD"
 authors = [{ name = "bissli" }]
 requires-python = ">=3.10"
-dependencies = [
-  "func-timeout",
-]
+dependencies = []
 
 [project.optional-dependencies]
 async = ["aiosqlite"]

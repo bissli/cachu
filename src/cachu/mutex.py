@@ -12,6 +12,8 @@ if TYPE_CHECKING:
     import redis
     import redis.asyncio as aioredis
 
+_MIN_WAIT = 0.001
+
 
 class CacheMutex(ABC):
     """Abstract base class for synchronous cache mutexes.
@@ -81,17 +83,31 @@ class NullAsyncMutex(AsyncCacheMutex):
 
 class ThreadingMutex(CacheMutex):
     """Per-key threading.Lock for local dogpile prevention.
+
+    Notes
+    -----
+    - The registry holds locks weakly, so an entry disappears once no live
+      mutex references it. A strong dict grew one entry per distinct cache
+      key and never shrank, which reintroduced the unbounded per-key growth
+      that `memory_maxsize` exists to stop: 200,000 caller-supplied keys
+      cost tens of megabytes of locks whatever bound the cache itself had.
+    - Every mutex that needs a key keeps a strong reference for its whole
+      lifetime, so two callers contending on one key still share one lock;
+      only genuinely unused entries are collected.
     """
-    _locks: ClassVar[dict[str, threading.Lock]] = {}
+    _locks: ClassVar['weakref.WeakValueDictionary[str, threading.Lock]'] = (
+        weakref.WeakValueDictionary())
     _registry_lock: ClassVar[threading.Lock] = threading.Lock()
 
     def __init__(self, key: str) -> None:
         self._key = key
         self._acquired = False
         with self._registry_lock:
-            if key not in self._locks:
-                self._locks[key] = threading.Lock()
-            self._lock = self._locks[key]
+            lock = self._locks.get(key)
+            if lock is None:
+                lock = threading.Lock()
+                self._locks[key] = lock
+            self._lock = lock
 
     def acquire(self, timeout: float | None = None) -> bool:
         if timeout is None:
@@ -115,9 +131,20 @@ class ThreadingMutex(CacheMutex):
 
 class AsyncioMutex(AsyncCacheMutex):
     """Per-key asyncio.Lock for async dogpile prevention, scoped per event loop.
+
+    Notes
+    -----
+    - The outer registry is keyed weakly by event loop and the inner one
+      weakly by lock, so neither a finished loop nor an idle key is
+      retained. A strong inner dict grew one entry per distinct cache key
+      for the life of the loop, defeating `memory_maxsize` for exactly the
+      caller-influenced key spaces it is meant to bound.
+    - A mutex holds its lock strongly from `acquire` until it is discarded,
+      so contending callers still share one lock per key.
     """
     _loop_locks: ClassVar[
-        'weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, dict[str, asyncio.Lock]]'
+        'weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, '
+        'weakref.WeakValueDictionary[str, asyncio.Lock]]'
     ] = weakref.WeakKeyDictionary()
     _registry_lock: ClassVar[threading.Lock] = threading.Lock()
 
@@ -133,7 +160,7 @@ class AsyncioMutex(AsyncCacheMutex):
         with self._registry_lock:
             per_loop = self._loop_locks.get(loop)
             if per_loop is None:
-                per_loop = {}
+                per_loop = weakref.WeakValueDictionary()
                 self._loop_locks[loop] = per_loop
             lock = per_loop.get(self._key)
             if lock is None:
@@ -142,6 +169,23 @@ class AsyncioMutex(AsyncCacheMutex):
             return lock
 
     async def acquire(self, timeout: float | None = None) -> bool:
+        """Acquire the per-loop lock, waiting at most `timeout` seconds.
+
+        Notes
+        -----
+        - A non-positive timeout is floored at `_MIN_WAIT` rather than
+          passed through. `asyncio.wait_for(..., 0)` wraps the coroutine in
+          a not-yet-done task and raises even on a free lock, so a zero wait
+          would report contention that does not exist - reachable whenever
+          `cache_deadline` clamps the dogpile wait to nothing.
+        - Testing `locked()` instead is not sound either: `Lock.release()`
+          clears the flag before waking the next waiter, so during that
+          handoff a free-looking lock still has a queued owner and a bare
+          `await acquire()` would block for that owner's whole critical
+          section.
+        - The floor is small enough to be indistinguishable from "try once"
+          and bounded, which is the property the caller actually needs.
+        """
         self._lock = self._resolve_lock()
         if timeout is None:
             await self._lock.acquire()
@@ -149,7 +193,8 @@ class AsyncioMutex(AsyncCacheMutex):
             return True
 
         try:
-            await asyncio.wait_for(self._lock.acquire(), timeout=timeout)
+            await asyncio.wait_for(
+                self._lock.acquire(), timeout=max(timeout, _MIN_WAIT))
             self._acquired = True
             return True
         except asyncio.TimeoutError:
@@ -191,9 +236,22 @@ class RedisMutex(CacheMutex):
         self._acquired = False
 
     def acquire(self, timeout: float | None = None) -> bool:
-        timeout = timeout or self._lock_timeout
-        end = time.time() + timeout
-        while time.time() < end:
+        """Poll SET NX until acquired or `timeout` seconds elapse.
+
+        Notes
+        -----
+        - A timeout of 0 makes exactly one attempt and returns, matching
+          threading.Lock.acquire(timeout=0). Only None falls back to the
+          configured lock_timeout - a falsy-check here would have turned an
+          explicit 0 into a full-length wait.
+        - Each poll iteration pays a full socket budget, so against an
+          unreachable endpoint the wall time is driven by the socket
+          timeouts, not by the 50 ms sleep.
+        """
+        if timeout is None:
+            timeout = self._lock_timeout
+        end = time.monotonic() + timeout
+        while True:
             if self._client.set(
                 self._key,
                 self._token,
@@ -202,8 +260,9 @@ class RedisMutex(CacheMutex):
             ):
                 self._acquired = True
                 return True
+            if not time.monotonic() < end:
+                return False
             time.sleep(0.05)
-        return False
 
     def release(self) -> None:
         if self._acquired:
@@ -234,9 +293,17 @@ class AsyncRedisMutex(AsyncCacheMutex):
         self._acquired = False
 
     async def acquire(self, timeout: float | None = None) -> bool:
-        timeout = timeout or self._lock_timeout
-        end = time.time() + timeout
-        while time.time() < end:
+        """Poll SET NX until acquired or `timeout` seconds elapse.
+
+        Notes
+        -----
+        - A timeout of 0 makes exactly one attempt and returns; only None
+          falls back to the configured lock_timeout.
+        """
+        if timeout is None:
+            timeout = self._lock_timeout
+        end = time.monotonic() + timeout
+        while True:
             if await self._client.set(
                 self._key,
                 self._token,
@@ -245,8 +312,9 @@ class AsyncRedisMutex(AsyncCacheMutex):
             ):
                 self._acquired = True
                 return True
+            if not time.monotonic() < end:
+                return False
             await asyncio.sleep(0.05)
-        return False
 
     async def release(self) -> None:
         if self._acquired:
