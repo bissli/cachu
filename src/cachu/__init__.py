@@ -1,6 +1,6 @@
 """Flexible caching library with support for memory, file, and Redis backends.
 """
-__version__ = '0.5.0'
+__version__ = '0.5.1'
 
 from . import backends, presets
 from .api import Backend, CacheEntry, CacheInfo, CacheMeta
