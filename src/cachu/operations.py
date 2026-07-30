@@ -183,10 +183,16 @@ def cache_clear(
       all - usually a package or backend name that does not exist - a
       warning is logged, since the two cases are otherwise
       indistinguishable.
-    - A clear failure propagates. Unlike the decorated call path this is
-      not governed by `fail_open`: clearing is an administrative operation
-      whose whole purpose is the side effect, so a silent failure would be
-      worse than a loud one.
+    - A failure on the backend you NAMED propagates: `backend=` says which
+      store you meant, and a silently failed clear of it would be worse
+      than a loud one.
+    - A failure on a backend you did NOT name is logged and skipped. A
+      sweeping `cache_clear(tag=...)` visits every declared region of the
+      package, so one unreachable Redis would otherwise abort a clear whose
+      target lived entirely in memory - and would do so only after paying
+      that backend's full socket budget.
+    - Which rule applies depends solely on the arguments, never on whether
+      the process happened to be warm.
     """
     pattern, backend_types, package = _clear_targets(
         tag, backend, package, global_clear)
@@ -206,8 +212,16 @@ def cache_clear(
         package, backend_types=backend_types, ttl=ttl))
 
     for (_pkg, btype, bttl), backend_instance in targets:
-        cleared = backend_instance.clear(pattern)
-        backend_instance.clear_stats()
+        try:
+            cleared = backend_instance.clear(pattern)
+            backend_instance.clear_stats()
+        except Exception:
+            if backend is not None:
+                raise
+            logger.warning(
+                f'Could not clear the {btype} backend (ttl={bttl}); it was '
+                f'visited because no backend= was given', exc_info=True)
+            continue
         if cleared > 0:
             total_cleared += cleared
             logger.debug(f'Cleared {cleared} entries from {btype} backend (ttl={bttl})')
@@ -354,7 +368,8 @@ async def async_cache_clear(
       matching its arguments, so it works in a cold process.
     - A return of 0 means "no entries matched"; a warning is logged when no
       region matched at all.
-    - A clear failure propagates rather than following `fail_open`.
+    - A failure on the backend you named propagates; a failure on one merely
+      swept because no `backend=` was given is logged and skipped.
     """
     pattern, backend_types, package = _clear_targets(
         tag, backend, package, global_clear)
@@ -379,8 +394,16 @@ async def async_cache_clear(
     ]
 
     for (_pkg, btype, bttl), backend_instance in targets:
-        cleared = await backend_instance.aclear(pattern)
-        await backend_instance.aclear_stats()
+        try:
+            cleared = await backend_instance.aclear(pattern)
+            await backend_instance.aclear_stats()
+        except Exception:
+            if backend is not None:
+                raise
+            logger.warning(
+                f'Could not clear the {btype} backend (ttl={bttl}); it was '
+                f'visited because no backend= was given', exc_info=True)
+            continue
         if cleared > 0:
             total_cleared += cleared
             logger.debug(f'Cleared {cleared} entries from {btype} backend (ttl={bttl})')

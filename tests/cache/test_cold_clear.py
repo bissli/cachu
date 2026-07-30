@@ -17,7 +17,7 @@ import logging
 
 import cachu
 import pytest
-from cachu.manager import manager
+from cachu.manager import CacheManager, manager
 
 
 @pytest.fixture
@@ -186,6 +186,57 @@ class TestRegionRegistry:
         ttl_regions = manager.get_regions(package, None, 222)
         assert ttl_regions == {(package, 'file', 222)}
 
+    def test_regions_are_filtered_by_package(self):
+        """get_regions never returns another package's regions.
+
+        Mutation: drop the package filter from get_regions, so a
+        cache_clear scoped to one package instantiates every other
+        package's backends - including their Redis clients.
+        Oracle: hand-derived membership - the region declared under 'beta'
+        must be absent from an 'alpha' lookup, and present under its own.
+        """
+        @cachu.cache(ttl=555, backend='memory', package='alpha', tag='a')
+        def in_alpha(x: int) -> int:
+            return x
+
+        @cachu.cache(ttl=666, backend='memory', package='beta', tag='b')
+        def in_beta(x: int) -> int:
+            return x
+
+        alpha_regions = manager.get_regions('alpha')
+
+        assert ('alpha', 'memory', 555) in alpha_regions
+        assert ('beta', 'memory', 666) not in alpha_regions
+        assert manager.get_regions('beta') == {('beta', 'memory', 666)}
+
+    def test_a_broken_region_does_not_abort_materialization(self, monkeypatch):
+        """One region that cannot be built leaves the others intact.
+
+        Mutation: drop the try/except from manager.materialize, so a single
+        unconstructable region turns a cold cache_clear into an exception -
+        the silent-no-op bug traded for a hard failure.
+        Oracle: hand-counted build count, 1 of the 2 declared regions.
+        """
+        @cachu.cache(ttl=777, backend='memory', tag='ok')
+        def healthy(x: int) -> int:
+            return x
+
+        @cachu.cache(ttl=888, backend='file', tag='broken')
+        def broken(x: int) -> int:
+            return x
+
+        package = cachu.config._get_caller_package()
+        original = CacheManager._create_backend
+
+        def selective(self, pkg, backend_type, ttl):
+            if backend_type == 'file':
+                raise RuntimeError('cannot build this region')
+            return original(self, pkg, backend_type, ttl)
+
+        monkeypatch.setattr(CacheManager, '_create_backend', selective)
+
+        assert manager.materialize(package) == 1
+
     def test_materialize_is_idempotent(self):
         """Materializing twice does not replace a live backend instance.
 
@@ -222,6 +273,20 @@ class TestNothingToClearIsVisible:
         with caplog.at_level(logging.WARNING, logger='cachu.operations'):
             assert cachu.cache_clear(package='package-that-does-not-exist') == 0
 
+        assert any('no cache region' in record.message for record in caplog.records)
+
+    async def test_async_missing_region_also_warns(self, caplog):
+        """async_cache_clear reports the same ambiguity.
+
+        Mutation: add the warning to the sync clear only, leaving async
+        callers unable to tell "cleared nothing" from "found nothing".
+        Oracle: the documented phrase 'no cache region' in the log record.
+        """
+        with caplog.at_level(logging.WARNING, logger='cachu.operations'):
+            cleared = await cachu.async_cache_clear(
+                package='package-that-does-not-exist')
+
+        assert cleared == 0
         assert any('no cache region' in record.message for record in caplog.records)
 
     def test_matching_region_with_no_entries_does_not_warn(self, caplog):
@@ -261,13 +326,12 @@ class TestExistingBehaviourIsPreserved:
 
         assert cachu.cache_clear(tag='warm', backend='memory', ttl=300) == 1
 
-    def test_clear_errors_propagate_regardless_of_fail_open(self, monkeypatch):
-        """A clear failure is never swallowed, even under the fail_open default.
+    def test_named_backend_failure_propagates(self, monkeypatch):
+        """A clear failure on the backend the caller named is never swallowed.
 
-        Mutation: wrap backend clears in a blanket try/except, or gate them on
-        fail_open. Clearing exists for its side effect, so a silently failed
-        clear is worse than a loud one - and it is what let a stale entry be
-        served in the reported incident.
+        Mutation: wrap every backend clear in a blanket try/except. Naming a
+        backend says which store you meant, and a silently failed clear of
+        it is what let a stale entry be served in the reported incident.
         Oracle: the sentinel error type raised by the stubbed clear.
         """
         @cachu.cache(ttl=300, backend='memory', tag='warm')
@@ -283,15 +347,44 @@ class TestExistingBehaviourIsPreserved:
 
         assert cachu.get_config().fail_open is True
         with pytest.raises(RuntimeError, match='clear exploded'):
-            cachu.cache_clear(tag='warm')
+            cachu.cache_clear(tag='warm', backend='memory')
 
-    def test_cold_clear_errors_propagate_too(self, monkeypatch):
-        """A materialized region's clear failure is not swallowed either.
+    def test_unnamed_backend_failure_does_not_abort_the_clear(self, monkeypatch, caplog):
+        """A sweeping clear survives one unreachable region and clears the rest.
 
-        Mutation: swallow errors for regions this call materialized, which
-        makes the same cache_clear raise or warn depending only on whether
-        the process happened to be warm.
-        Oracle: the sentinel error type, raised from a cold process.
+        Mutation: propagate unconditionally. A cache_clear(tag=...) whose
+        target lives in memory would then be aborted by an unrelated
+        declared-but-unreachable Redis region - after paying its full socket
+        budget - where it used to be a free no-op.
+        Oracle: hand-counted entries cleared from the healthy backend, 1,
+        plus a warning naming the failed one.
+        """
+        @cachu.cache(ttl=300, backend='memory', tag='sweep')
+        def in_memory(x: int) -> int:
+            return x
+
+        @cachu.cache(ttl=300, backend='file', tag='sweep')
+        def on_disk(x: int) -> int:
+            return x
+
+        in_memory(1)
+
+        def boom(self, pattern=None):
+            raise RuntimeError('clear exploded')
+
+        monkeypatch.setattr(cachu.backends.SqliteBackend, 'clear', boom)
+
+        with caplog.at_level(logging.WARNING, logger='cachu.operations'):
+            assert cachu.cache_clear(tag='sweep') == 1
+
+        assert any('Could not clear' in r.message for r in caplog.records)
+
+    def test_the_rule_does_not_depend_on_process_warmth(self, monkeypatch):
+        """A cold and a warm sweeping clear behave identically.
+
+        Mutation: discriminate on whether this call materialized the backend,
+        which makes the same call raise or warn purely by process history.
+        Oracle: the same outcome, 0 cleared and no exception, both times.
         """
         @cachu.cache(ttl=300, backend='memory', tag='cold')
         def fetch(x: int) -> int:
@@ -302,5 +395,5 @@ class TestExistingBehaviourIsPreserved:
 
         monkeypatch.setattr(cachu.backends.MemoryBackend, 'clear', boom)
 
-        with pytest.raises(RuntimeError, match='clear exploded'):
-            cachu.cache_clear(tag='cold')
+        assert cachu.cache_clear(tag='cold') == 0
+        assert cachu.cache_clear(tag='cold') == 0

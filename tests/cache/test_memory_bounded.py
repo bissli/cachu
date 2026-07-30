@@ -14,6 +14,7 @@ import time
 
 import cachu
 import pytest
+from cachu.backends import memory as memory_module
 from cachu.backends.memory import MemoryBackend
 from cachu.mutex import AsyncioMutex, ThreadingMutex
 
@@ -47,8 +48,7 @@ class TestUnboundedDefault:
     def test_live_entries_are_never_swept(self):
         """A sweep drops expired entries only, never live ones.
 
-        Mutation: make _do_sweep use `now >= expires_at` on a fresh entry, or
-        drop entries unconditionally.
+        Mutation: drop entries unconditionally in _do_sweep.
         Oracle: hand-counted live count, 3.
         """
         backend = MemoryBackend(sweep_interval=0)
@@ -57,6 +57,46 @@ class TestUnboundedDefault:
 
         assert backend.sweep() == 0
         assert backend.count() == 3
+
+    def test_an_entry_expiring_exactly_now_is_still_live(self):
+        """Expiry is strict: expires_at == now has not yet passed.
+
+        Mutation: `now > expires_at` -> `now >= expires_at` in _do_sweep.
+        A fresh entry cannot separate the two, so the boundary is pinned
+        directly by making expires_at equal the swept clock reading.
+        Oracle: hand-derived residency - the entry survives at exactly its
+        expiry instant and is dropped one microsecond later.
+        """
+        backend = MemoryBackend(sweep_interval=0)
+        backend.set('k', 'v', 300)
+        value, created_at, _ = backend._cache['k']
+        boundary = time.time() + 5.0
+        backend._cache['k'] = (value, created_at, boundary)
+
+        assert backend._do_sweep(now=boundary) == 0
+        assert 'k' in backend._cache
+
+        assert backend._do_sweep(now=boundary + 1e-6) == 1
+        assert 'k' not in backend._cache
+
+    def test_a_read_at_the_exact_expiry_instant_still_hits(self, monkeypatch):
+        """The same strict boundary governs the read path.
+
+        Mutation: `now > expires_at` -> `now >= expires_at` in _do_get.
+        Real time cannot land exactly on expires_at, so the backend's clock
+        is pinned to make the boundary reachable at all.
+        Oracle: the stored value when now == expires_at, NO_VALUE one
+        microsecond later.
+        """
+        backend = MemoryBackend(sweep_interval=float('inf'))
+        backend.set('k', 'v', 300)
+        value, created_at, expires_at = backend._cache['k']
+
+        monkeypatch.setattr(memory_module.time, 'time', lambda: expires_at)
+        assert backend.get('k') == 'v'
+
+        monkeypatch.setattr(memory_module.time, 'time', lambda: expires_at + 1e-6)
+        assert backend.get('k') is cachu.api.NO_VALUE
 
 
 class TestLruBound:
@@ -100,8 +140,7 @@ class TestLruBound:
     def test_overwriting_a_key_does_not_grow_past_the_bound(self):
         """Re-setting an existing key replaces it rather than evicting a peer.
 
-        Mutation: insert without move_to_end so a rewrite leaves stale
-        ordering, or evict before insert so the count drifts.
+        Mutation: evict before insert, so the count drifts.
         Oracle: hand-counted survivor set {'a', 'b'} and evictions == 0.
         """
         backend = MemoryBackend(maxsize=2)
@@ -112,6 +151,23 @@ class TestLruBound:
         assert sorted(backend.keys()) == ['a', 'b']
         assert backend.get('a') == 99
         assert backend.evictions == 0
+
+    def test_overwriting_a_key_refreshes_its_recency(self):
+        """A rewrite makes a key most-recently-used, not just newest-valued.
+
+        Mutation: remove move_to_end from _do_set. Plain reassignment does
+        NOT reorder an OrderedDict, so 'a' would stay oldest and be evicted
+        despite having just been written.
+        Oracle: hand-derived survivor set {'a', 'c'} - after writing a, b
+        then rewriting a, the least-recently-used key is 'b'.
+        """
+        backend = MemoryBackend(maxsize=2)
+        backend.set('a', 1, 300)
+        backend.set('b', 2, 300)
+        backend.set('a', 99, 300)
+        backend.set('c', 3, 300)
+
+        assert sorted(backend.keys()) == ['a', 'c']
 
     def test_bound_of_one_keeps_only_the_newest(self):
         """maxsize=1 is honoured exactly, not off by one.
@@ -281,6 +337,29 @@ class TestConfigWiring:
         """
         with pytest.raises(ValueError, match='memory_maxsize'):
             cachu.configure(memory_maxsize=bad)
+
+    def test_sweeping_can_be_switched_off(self):
+        """float('inf') disables sweeping and restores the pre-0.4.0 behaviour.
+
+        Mutation: reject non-finite values outright, leaving no documented
+        way to opt out of the O(n) sweep this release turned on by default.
+        Oracle: hand-derived residency - the expired entry survives a later
+        read, exactly as it did before sweeping existed.
+        """
+        cachu.configure(memory_sweep_interval=float('inf'))
+
+        @cachu.cache(ttl=300, backend='memory', tag='nosweep')
+        def fetch(key: int) -> int:
+            return key
+
+        fetch(1)
+        backend = cachu.get_backend('memory', ttl=300)
+        stored = next(iter(backend._cache))
+        _expire(backend, stored)
+        backend.set('other', 1, 300)
+
+        assert stored in backend._cache
+        assert backend.expired_swept == 0
 
     @pytest.mark.parametrize('bad', [-1, 'often'])
     def test_invalid_sweep_interval_is_rejected(self, bad):

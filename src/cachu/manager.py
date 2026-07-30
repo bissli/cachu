@@ -406,10 +406,29 @@ async def aget_backend(
     return await manager.aget_backend(package, backend_type, ttl)
 
 
-def clear_backends(package: str | None = None) -> None:
+def clear_backends(package: str | None = None, regions: bool = False) -> None:
     """Clear all backend instances for a package. Primarily for testing.
+
+    Parameters
+    ----------
+    package : str or None, default None
+        Package to clear for; every package when None.
+    regions : bool, default False
+        Also forget the (package, backend, ttl) regions that @cache
+        registered, so a later `cache_clear` cannot materialize them again.
+
+    Notes
+    -----
+    - Regions are registered at decoration time and deliberately outlive
+      backend instances: that is what lets `cache_clear` reach a region in
+      a cold process.
+    - A test suite that declares decorators INSIDE test functions needs
+      `regions=True` in its teardown, or one test's region is materialized
+      and cleared by the next.
     """
     manager.clear(package)
+    if regions:
+        manager.clear_regions(package)
 
 
 async def clear_async_backends(package: str | None = None) -> None:

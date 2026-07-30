@@ -9,6 +9,9 @@ Notes
 - These pin the wiring so a backend cannot become functionally present but
   invisible again.
 """
+import subprocess
+import sys
+
 import cachu
 from cachu.backends import MemoryBackend, NullBackend, RedisBackend
 from cachu.backends import SqliteBackend
@@ -49,14 +52,36 @@ class TestBackendsPackageExports:
             assert cls.__name__ in cachu.backends.__all__
             assert getattr(cachu.backends, cls.__name__) is cls
 
-    def test_backends_package_is_reachable_from_the_top_level(self):
-        """`import cachu` is enough to introspect the backends.
+    def test_backends_package_is_reachable_from_a_bare_import(self):
+        """`import cachu` alone exposes cachu.backends and every backend class.
 
-        Mutation: stop importing .backends in cachu/__init__, making
-        cachu.backends an AttributeError until something else imports it.
-        Oracle: the 'backends' entry in cachu.__all__.
+        Mutation: drop `backends` from cachu.__all__, or stop exporting a
+        backend class from cachu/backends/__init__.
+        Oracle: the documented export list, resolved in a FRESH interpreter
+        that imports nothing but cachu.
+
+        Deleting the `from . import backends` line specifically is NOT
+        detectable and no assertion here claims otherwise: cachu/__init__
+        also does `from .backends.redis import get_redis_client`, which
+        binds the submodule attribute as a side effect. The line is kept as
+        the intentional declaration rather than relying on that accident -
+        which is the coupling that made the null backend invisible in the
+        first place - but the two are behaviourally identical.
         """
-        assert 'backends' in cachu.__all__
+        probe = (
+            'import cachu; '
+            "assert 'backends' in cachu.__all__, 'backends missing from __all__'; "
+            "names = ['MemoryBackend', 'NullBackend', 'RedisBackend', 'SqliteBackend']; "
+            'assert all(hasattr(cachu.backends, n) for n in names), '
+            'sorted(cachu.backends.__all__); '
+            'print("ok")'
+        )
+        result = subprocess.run(
+            [sys.executable, '-c', probe],
+            capture_output=True, text=True, timeout=60)
+
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip() == 'ok'
         assert cachu.backends.NullBackend is NullBackend
 
 

@@ -19,7 +19,7 @@ import pytest
 from cachu import decorator as decorator_module
 from cachu.backends.memory import MemoryBackend
 from cachu.manager import CacheManager
-from cachu.mutex import ThreadingMutex
+from cachu.mutex import AsyncioMutex, ThreadingMutex
 
 
 class _Clock:
@@ -147,20 +147,55 @@ class TestBudgetStopsCacheWork:
         assert len(calls) == 2
 
     def test_caller_still_gets_the_correct_value(self, clock, monkeypatch):
-        """Shedding cache work never changes the answer.
+        """Shedding cache work never changes the answer, and really sheds it.
 
-        Mutation: return a sentinel or None when the budget is exhausted.
-        Oracle: the undecorated function's return value, 'value'.
+        Mutation: delete any of the post-read _budget_spent guards - the
+        post-lock re-read, the miss stat, or the write. One read already
+        overruns the budget 200-fold, so every later step must be skipped.
+        Oracle: the undecorated return value plus the exact cache work
+        performed, which is one read and nothing else.
         """
         backend = _SlowBackend(clock, cost=99.0)
         _install(monkeypatch, backend)
         cachu.configure(cache_deadline=0.5)
+
+        seen = []
+        original = ThreadingMutex.acquire
+
+        def record(self, timeout=None):
+            seen.append(timeout)
+            return original(self, timeout)
+
+        monkeypatch.setattr(ThreadingMutex, 'acquire', record)
 
         @cachu.cache(ttl=300, backend='memory', tag='slow')
         def fetch(key: str) -> str:
             return 'value'
 
         assert fetch('k') == 'value'
+        assert backend.ops == ['get']
+        assert seen == []
+
+    def test_budget_is_spent_at_exactly_the_deadline(self, clock, monkeypatch):
+        """The budget comparison is inclusive at the boundary.
+
+        Mutation: `>=` -> `>` in _budget_spent, which lets one more cache
+        step through at exactly the deadline.
+        Oracle: hand-computed arithmetic - two 0.5s reads spend a 1.0s budget
+        exactly, so the miss stat and the write must not run.
+        """
+        backend = _SlowBackend(clock, cost=0.5)
+        _install(monkeypatch, backend)
+        cachu.configure(cache_deadline=1.0)
+
+        @cachu.cache(ttl=300, backend='memory', tag='slow')
+        def fetch(key: str) -> str:
+            return 'value'
+
+        fetch('k')
+
+        assert clock.now == pytest.approx(1001.0)
+        assert backend.ops == ['get', 'get']
 
     def test_lock_wait_is_clamped_to_the_remaining_budget(self, clock, monkeypatch):
         """The dogpile wait cannot outlive the budget.
@@ -220,6 +255,95 @@ class TestFunctionTimeIsNotCharged:
         assert fetch('k') == 'value'
         assert len(calls) == 1
         assert 'set' in backend.ops
+
+
+class TestAsyncMirrorsSync:
+    """Every budget guard exists on the async path too.
+
+    Notes
+    -----
+    - The two wrappers are near-identical by necessity, so a guard added to
+      one and forgotten in the other is the most likely defect here.
+    """
+
+    async def test_async_slow_function_is_still_cached(self, clock, monkeypatch):
+        """An async function slower than the deadline still populates the cache.
+
+        Mutation: remove `started += time.monotonic() - fn_started` from the
+        ASYNC wrapper only. Its sync twin is covered; without this, any async
+        function slower than cache_deadline would never cache at all.
+        Oracle: hand-counted invocation count, 1 - the second call must hit.
+        """
+        backend = _SlowBackend(clock, cost=0.01)
+        _install(monkeypatch, backend)
+        cachu.configure(cache_deadline=1.0)
+
+        calls = []
+
+        @cachu.cache(ttl=300, backend='memory', tag='slow')
+        async def fetch(key: str) -> str:
+            calls.append(key)
+            clock.advance(100.0)
+            return 'value'
+
+        await fetch('k')
+        assert await fetch('k') == 'value'
+        assert len(calls) == 1
+        assert 'aset' in backend.ops
+
+    async def test_async_exhausted_budget_skips_every_later_step(self, clock, monkeypatch):
+        """An exhausted budget stops async cache work, mirroring the sync path.
+
+        Mutation: delete the async mutex-block guard, the async post-lock
+        read guard, or the async hit-stat guard.
+        Oracle: the exact cache work performed - one read and nothing else.
+        """
+        backend = _SlowBackend(clock, cost=99.0)
+        _install(monkeypatch, backend)
+        cachu.configure(cache_deadline=0.5)
+
+        seen = []
+
+        async def record(self, timeout=None):
+            seen.append(timeout)
+            return True
+
+        monkeypatch.setattr(AsyncioMutex, 'acquire', record)
+
+        @cachu.cache(ttl=300, backend='memory', tag='slow')
+        async def fetch(key: str) -> str:
+            return 'value'
+
+        assert await fetch('k') == 'value'
+        assert backend.ops == ['aget']
+        assert seen == []
+
+    async def test_async_hit_stat_is_skipped_when_the_budget_is_spent(self, clock, monkeypatch):
+        """A hit reached on an exhausted budget does not pay for a stat write.
+
+        Mutation: delete the _budget_spent guard around the hit stat, on
+        either wrapper. The read succeeded, but it may have consumed the
+        whole budget on the way.
+        Oracle: the cached value plus the exact cache work performed - one
+        read that HITS, and no stat write after it.
+        """
+        backend = _SlowBackend(clock, cost=0.01)
+        _install(monkeypatch, backend)
+        cachu.configure(cache_deadline=0.5)
+
+        @cachu.cache(ttl=300, backend='memory', tag='slow')
+        async def fetch(key: str) -> str:
+            return 'value'
+
+        assert await fetch('k') == 'value'
+        assert 'aset' in backend.ops
+
+        backend._cost = 99.0
+        backend.ops.clear()
+
+        assert await fetch('k') == 'value'
+
+        assert backend.ops == ['aget']
 
 
 class TestDefaultIsUnbounded:

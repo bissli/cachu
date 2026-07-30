@@ -277,7 +277,8 @@ class CacheConfig:
         Entry bound for the 'memory' backend; None is unbounded.
     memory_sweep_interval : float, default 60.0
         Minimum seconds between amortized expired-entry sweeps of the
-        'memory' backend. 0 sweeps on every operation.
+        'memory' backend. 0 sweeps on every operation; `float('inf')`
+        disables sweeping and restores the pre-0.4.0 behaviour.
 
     Notes
     -----
@@ -415,9 +416,10 @@ class ConfigRegistry:
 
         if 'memory_sweep_interval' in kwargs:
             interval = kwargs['memory_sweep_interval']
-            if not _is_positive_number(interval, allow_zero=True):
+            if interval != math.inf and not _is_positive_number(interval, allow_zero=True):
                 raise ConfigurationError(
-                    f'memory_sweep_interval must be a non-negative number of seconds, got {interval!r}')
+                    'memory_sweep_interval must be a non-negative number of '
+                    f"seconds, or float('inf') to disable sweeping, got {interval!r}")
 
     def get_config(self, package: str | None = None) -> CacheConfig:
         """Get config for a package, with fallback to default.
@@ -503,7 +505,8 @@ def configure(
         unbounded.
     memory_sweep_interval : float or None, default None
         Minimum seconds between amortized sweeps of expired 'memory' backend
-        entries (default 60.0). 0 sweeps on every operation.
+        entries (default 60.0). 0 sweeps on every operation; `float('inf')`
+        disables sweeping entirely.
     package : str or None, default None
         Package whose configuration is being set. Auto-detected from the
         caller's top-level package when None. Pass it explicitly to configure

@@ -783,7 +783,7 @@ hash, a tenant id, a search term - since otherwise the cache grows until restart
 on by default.
 
 **Sweep cost.** A sweep is a single O(n) pass under the backend lock, so one caller per
-interval pays it. Measured on CPython 3.11: ~1 ms at 10,000 entries, ~20-55 ms at
+interval pays it - and so does every other thread waiting on that lock. Measured on CPython 3.11: ~1 ms at 10,000 entries, ~20-55 ms at
 200,000. If that spike matters on your hot path, set `memory_maxsize` (which caps `n`,
 and therefore the sweep) or raise `memory_sweep_interval`.
 
@@ -796,6 +796,9 @@ backend = cachu.get_backend('memory', ttl=300)   # -1 when the decorator's ttl i
 backend.sweep()
 print(backend.evictions, backend.expired_swept)
 ```
+
+Set `memory_sweep_interval=float('inf')` to disable sweeping altogether; `0` means
+"sweep on every operation", which is the opposite.
 
 Both settings are read when the backend is **constructed**, on the first cached call.
 Setting them afterwards has no effect on the existing instance, so configure them at
@@ -997,14 +1000,20 @@ silently did nothing - and against a shared backend, served a stale value afterw
 now instantiates the `(package, backend, ttl)` regions that `@cache` declared at import
 time. Consequences: a cold `cache_clear()` creates the SQLite file for any declared
 `backend='file'` region, and connects to any declared `backend='redis'` region, so
-against an unreachable Redis it now raises or spends the socket budget where it used to
-return `0` instantly. Scope the call - `cache_clear(backend='memory', ttl=300)` - if you
-do not want that.
+against an unreachable Redis it now spends that backend's socket budget where it used to
+return `0` instantly. A failure on a backend you did not name is logged and skipped
+rather than raised, but the time is still spent - scope the call
+(`cache_clear(backend='memory', ttl=300)`) if you do not want that. Note also that a
+cold `cache_clear(global_clear=True)` can now reach a shared Redis it previously never
+opened.
 
 **The memory backend now sweeps expired entries every 60 s by default**
 (`memory_sweep_interval=60.0`). One caller per interval pays a single O(n) pass under
 the backend lock: ~1 ms at 10,000 entries, ~20-55 ms at 200,000. Set `memory_maxsize` to
-cap n, or raise `memory_sweep_interval`, if that spike matters on your hot path.
+cap n, raise `memory_sweep_interval`, or pass `memory_sweep_interval=float('inf')` to
+switch sweeping off entirely and restore the previous behaviour. Tracking LRU recency
+also moved the entry store to an `OrderedDict`, which costs roughly 20% more memory at
+200,000 entries than the plain dict it replaced.
 
 **`RedisMutex.acquire(timeout=0)` now makes a single attempt** instead of falling back to
 the configured `lock_timeout`, matching `threading.Lock.acquire(timeout=0)`. This only

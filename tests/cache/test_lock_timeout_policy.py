@@ -91,20 +91,37 @@ class TestRaiseShedsLoad:
     def test_cached_value_wins_over_raising(self, monkeypatch):
         """A waiter whose wait was rewarded returns the value, it does not raise.
 
-        Mutation: move the raise above the post-lock re-read, so a waiter that
-        the lock holder just served would fail instead of being served.
-        Oracle: the value the lock holder stored, 10.
+        Mutation: move the raise above the post-lock re-read, so a waiter
+        that the lock holder just served would fail instead of being served.
+        Oracle: the value the holder stored, 10, reached only by the
+        post-lock read. The pre-lock read must MISS, otherwise the wrapper
+        returns before the mutex block and the mutation is invisible - so
+        the stub answers NO_VALUE first and the stored value second, which
+        is exactly what a waiter observes when the holder writes while it
+        waits.
         """
-        @cachu.cache(ttl=300, backend='memory', tag='herd')
-        def fetch(key: int) -> int:
-            return key * 2
-
-        assert fetch(5) == 10
-
         cachu.configure(on_lock_timeout='raise')
+        reads = []
+
+        def arriving_late(self, key):
+            reads.append(key)
+            if len(reads) == 1:
+                return cachu.api.NO_VALUE, None
+            return 10, time.time()
+
+        monkeypatch.setattr(MemoryBackend, 'get_with_metadata', arriving_late)
         monkeypatch.setattr(ThreadingMutex, 'acquire', lambda self, timeout=None: False)
 
+        calls = []
+
+        @cachu.cache(ttl=300, backend='memory', tag='herd')
+        def fetch(key: int) -> int:
+            calls.append(key)
+            return -1
+
         assert fetch(5) == 10
+        assert len(reads) == 2
+        assert calls == []
 
     def test_error_is_a_cache_error(self, lock_always_times_out):
         """CacheLockTimeout stays inside the library's exception hierarchy.

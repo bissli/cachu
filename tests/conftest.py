@@ -28,6 +28,7 @@ def _clear_all_backends() -> None:
     declare their decorators inline, so regions must be dropped between tests
     or one test's region is materialized and cleared by the next.
     """
+    import cachu
     from cachu.manager import manager
     from cachu.mutex import AsyncioMutex, ThreadingMutex
 
@@ -37,7 +38,7 @@ def _clear_all_backends() -> None:
         except Exception:
             pass
 
-    manager.clear_regions()
+    cachu.clear_backends(regions=True)
     ThreadingMutex.clear_locks()
     AsyncioMutex.clear_locks()
 
