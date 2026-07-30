@@ -263,7 +263,9 @@ class CacheConfig:
     redis_health_check_interval : int, default 30
         Seconds between redis-py connection health checks.
     redis_socket_timeout : float, default 5.0
-        Passed to redis-py as BOTH socket_timeout and socket_connect_timeout.
+        Passed to redis-py as BOTH socket_timeout and socket_connect_timeout,
+        and enforced as the budget for one whole connect attempt however many
+        addresses the endpoint resolves to.
     redis_retry_count : int, default 3
         Retry attempts redis-py makes per operation.
     fail_open : bool, default True
@@ -297,6 +299,14 @@ class CacheConfig:
       `redis_retry_count` bound a single in-flight call; `cache_deadline`
       bounds the cumulative work between them. They are complementary, not
       alternatives.
+    - The address count barely enters that budget: cachu shares one connect
+      attempt across every address redis-py resolves rather than restarting
+      the clock per address, so an endpoint with n addresses costs at most
+      `redis_socket_timeout * (1 + (n - 1) * 0.2)` per attempt instead of n
+      times it. The residual term is a guaranteed per-address share, without
+      which redis-py's failover to a healthy address stops working. DNS
+      resolution runs inside that budget and is bounded by no redis-py
+      timeout, so a wedged resolver answers to the host's resolver settings.
     """
     backend_default: str = 'memory'
     key_prefix: str = ''
@@ -488,7 +498,9 @@ def configure(
     redis_health_check_interval : int or None, default None
         Seconds between connection health checks (default 30).
     redis_socket_timeout : float or None, default None
-        Socket timeout in seconds (default 5.0); applies to connect and read.
+        Socket timeout in seconds (default 5.0); applies to connect and read,
+        and bounds one whole connect attempt regardless of how many addresses
+        the endpoint resolves to.
     redis_retry_count : int or None, default None
         Retries on connection failure (default 3).
     fail_open : bool or None, default None

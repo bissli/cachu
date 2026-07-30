@@ -8,11 +8,14 @@ from functools import wraps
 from typing import Any
 
 from .api import NO_VALUE, CacheInfo, CacheMeta
+from .backends.redis import _CURRSIZE_FRESH_PREFIX, _CURRSIZE_LAST_PREFIX
+from .backends.redis import _CURRSIZE_LOCK_PREFIX, RedisBackend
 from .config import VALID_BACKENDS, _get_caller_package, get_config
 from .config import is_disabled
 from .exception import CacheLockTimeout
 from .manager import manager
-from .util import _is_connection_like, _predicate_arity, make_key_generator
+from .util import _is_connection_like, _normalize_tag, _predicate_arity
+from .util import _seconds_to_region_name, make_key_generator
 from .util import make_partial_pattern, mangle_key, validate_entry
 
 logger = logging.getLogger(__name__)
@@ -285,7 +288,8 @@ def cache(
         logger.debug(
             f'@cache {fn.__name__}: package={resolved_package!r}, '
             f'backend={resolved_backend!r}, ttl={ttl_for_backend}')
-        manager.register_region(resolved_package, resolved_backend, ttl_for_backend)
+        manager.register_region(
+            resolved_package, resolved_backend, ttl_for_backend, tag)
         key_generator = make_key_generator(fn, tag, exclude)
         fn_name = getattr(fn, '__wrapped__', fn).__name__
         is_async = asyncio.iscoroutinefunction(fn)
@@ -588,43 +592,109 @@ def cache(
 def get_cache_info(fn: Callable[..., Any]) -> CacheInfo:
     """Get cache statistics for a decorated function.
 
-    Args:
-        fn: A function decorated with @cache
+    Parameters
+    ----------
+    fn : Callable
+        Function decorated with @cache.
 
     Returns
-        CacheInfo with hits, misses, and currsize
+    -------
+    CacheInfo
+        hits, misses and currsize for `fn`.
+
+    Notes
+    -----
+    - Backend faults answer to `fail_open` exactly as the read path does. A
+      failed stats read degrades to zeros; a failed currsize degrades to 0
+      alone, keeping the counters the backend did answer. `fail_open=False`
+      propagates both. Reporting a cache as idle is a better answer to a
+      Redis blip than raising out of a stats view.
+    - `currsize` is counted with the same region-scoped glob `.clear()`
+      uses, so it counts this region's entries only - not another TTL
+      region's leftovers, and not the `lock:` keys of live dogpile mutexes.
+    - On Redis it is served from the stale-while-revalidate cache shared
+      with the async path, so repeated views cost one keyspace SCAN per
+      `_CURRSIZE_FRESH_TTL` rather than one per call.
     """
     meta = getattr(fn, '_cache_meta', None)
     if meta is None:
         return CacheInfo(hits=0, misses=0, currsize=0)
 
     fn_name = getattr(fn, '__wrapped__', fn).__name__
-    backend_instance = manager.get_backend(meta.package, meta.backend, meta.ttl)
-    hits, misses = backend_instance.get_stats(fn_name)
-
     cfg = get_config(meta.package)
-    pattern = f'*:{cfg.key_prefix}{fn_name}|*'
-    currsize = backend_instance.count(pattern)
+
+    try:
+        backend_instance = manager.get_backend(meta.package, meta.backend, meta.ttl)
+        hits, misses = backend_instance.get_stats(fn_name)
+    except Exception:
+        if not cfg.fail_open:
+            raise
+        logger.warning(
+            f'Cache stats unavailable for {fn_name!r}; reporting zeros',
+            exc_info=True)
+        return CacheInfo(hits=0, misses=0, currsize=0)
+
+    pattern = make_partial_pattern(fn_name, meta.tag, cfg.key_prefix, meta.ttl)
+    try:
+        if isinstance(backend_instance, RedisBackend):
+            currsize = _get_cached_currsize(
+                backend_instance, meta.package, fn_name, meta.ttl, meta.tag, pattern)
+        else:
+            currsize = backend_instance.count(pattern)
+    except Exception:
+        if not cfg.fail_open:
+            raise
+        logger.warning(
+            f'Cache currsize unavailable for {fn_name!r}; reporting 0',
+            exc_info=True)
+        currsize = 0
 
     return CacheInfo(hits=hits, misses=misses, currsize=currsize)
 
 
 _CURRSIZE_FRESH_TTL = 60
 _CURRSIZE_LOCK_TTL = 30
-_CURRSIZE_FRESH_PREFIX = 'cachu:_currsize:'
-_CURRSIZE_LAST_PREFIX = 'cachu:_currsize_last:'
-_CURRSIZE_LOCK_PREFIX = 'cachu:_currsize_lock:'
 
 _background_tasks: set[asyncio.Task] = set()
 
 
-def _currsize_keys(package: str | None, fn_name: str) -> tuple[str, str, str]:
-    """Build the (fresh, last, lock) Redis keys for a (package, fn_name) pair.
+def _currsize_keys(
+    package: str | None,
+    fn_name: str,
+    ttl: int,
+    tag: str = '',
+) -> tuple[str, str, str]:
+    """Build the (fresh, last, lock) Redis keys for one cached function.
 
-    The variable part is wrapped in a '{...}' hash tag so all three keys map to
-    the same Redis Cluster slot, keeping the multi-key MGET legal on cluster.
+    Parameters
+    ----------
+    package : str or None
+        Owning package.
+    fn_name : str
+        Decorated function name.
+    ttl : int
+        TTL region the count is scoped to.
+    tag : str, default ''
+        Tag the decorator declared.
+
+    Returns
+    -------
+    tuple of str
+        The fresh, last-known and refresh-lock keys.
+
+    Notes
+    -----
+    - The variable part is wrapped in a '{...}' hash tag so all three keys
+      map to the same Redis Cluster slot, keeping the multi-key MGET legal
+      on cluster.
+    - The identity must carry everything the counted GLOB carries. The glob
+      is scoped to a region and a tag, so two same-named functions in
+      different TTL regions - or one function's entries before and after a
+      TTL change - would otherwise share one cached count and report each
+      other's size.
     """
-    suffix = '{' + f'{package or "_"}:{fn_name}' + '}'
+    region = _seconds_to_region_name(ttl)
+    suffix = '{' + f'{package or "_"}:{region}:{_normalize_tag(tag)}:{fn_name}' + '}'
     return (
         f'{_CURRSIZE_FRESH_PREFIX}{suffix}',
         f'{_CURRSIZE_LAST_PREFIX}{suffix}',
@@ -655,18 +725,89 @@ async def _refresh_currsize_async(
             pass
 
 
+def _get_cached_currsize(
+    backend: Any,
+    package: str | None,
+    fn_name: str,
+    ttl: int,
+    tag: str,
+    pattern: str,
+) -> int:
+    """Stale-while-revalidate currsize for a Redis-backed function (sync).
+
+    Parameters
+    ----------
+    backend : RedisBackend
+        Backend holding the region being reported on.
+    package : str or None
+        Owning package, part of the cache key.
+    fn_name : str
+        Decorated function name, part of the cache key.
+    ttl : int
+        TTL region, part of the cache key so two regions cannot share a count.
+    tag : str
+        Declared tag, part of the cache key for the same reason.
+    pattern : str
+        Region-scoped glob whose matches are counted.
+
+    Returns
+    -------
+    int
+        A fresh count when one is cached, otherwise the last-known count.
+
+    Notes
+    -----
+    - A sync caller cannot schedule a background refresh, so the ONE caller
+      per `_CURRSIZE_FRESH_TTL` that wins the refresh lock pays the SCAN
+      inline and returns the exact count; everyone else is answered from the
+      last-known value without touching the keyspace. The async path hands
+      the same work to a task instead, which is why it returns 0 rather than
+      a count on a cold start.
+    - Both paths derive their keys from `_currsize_keys`, so a service that
+      exposes a sync and an async stats view scans once for the two of them.
+    - The refresh lock is released in a `finally`: a SCAN that raises must
+      not leave the lock standing for `_CURRSIZE_LOCK_TTL`, or currsize
+      freezes at its last value for that long.
+    """
+    fresh_key, last_key, lock_key = _currsize_keys(package, fn_name, ttl, tag)
+    client = backend.client
+    fresh, last = client.mget(fresh_key, last_key)
+    if fresh is not None:
+        return int(fresh)
+
+    if not client.set(lock_key, b'1', nx=True, ex=_CURRSIZE_LOCK_TTL):
+        return int(last) if last is not None else 0
+
+    try:
+        count = backend.count(pattern)
+        client.set(fresh_key, count, ex=_CURRSIZE_FRESH_TTL)
+        client.set(last_key, count)
+        return count
+    finally:
+        try:
+            client.delete(lock_key)
+        except Exception:
+            logger.warning(
+                f'currsize refresh lock release failed for {fn_name!r}',
+                exc_info=True)
+
+
 async def _get_cached_currsize_async(
     backend: Any,
     package: str | None,
     fn_name: str,
+    ttl: int,
+    tag: str,
     pattern: str,
 ) -> int:
     """Stale-while-revalidate currsize for a Redis-backed function.
 
     Returns a fresh value if available; otherwise returns the last-known value
-    (or 0 on cold start) and schedules a background refresh.
+    (or 0 on cold start) and schedules a background refresh. The cache keys
+    carry the TTL region and tag the counted glob is scoped to, so two regions
+    never share one count.
     """
-    fresh_key, last_key, lock_key = _currsize_keys(package, fn_name)
+    fresh_key, last_key, lock_key = _currsize_keys(package, fn_name, ttl, tag)
     client = backend._get_async_client()
     fresh, last = await client.mget(fresh_key, last_key)
     if fresh is not None:
@@ -685,34 +826,55 @@ async def _get_cached_currsize_async(
 async def get_async_cache_info(fn: Callable[..., Any]) -> CacheInfo:
     """Get cache statistics for an async decorated function.
 
-    Args:
-        fn: A function decorated with @cache
+    Parameters
+    ----------
+    fn : Callable
+        Function decorated with @cache.
 
     Returns
-        CacheInfo with hits, misses, and currsize
+    -------
+    CacheInfo
+        hits, misses and currsize for `fn`.
+
+    Notes
+    -----
+    - Degrades exactly as `get_cache_info` does: backend construction and
+      the stats read answer to `fail_open` too, not only currsize.
+    - `currsize` on a cold Redis start is 0 rather than a count, because the
+      refresh runs as a background task instead of inline.
     """
     meta = getattr(fn, '_cache_meta', None)
     if meta is None:
         return CacheInfo(hits=0, misses=0, currsize=0)
 
     fn_name = getattr(fn, '__wrapped__', fn).__name__
-    backend_instance = await manager.aget_backend(meta.package, meta.backend, meta.ttl)
-    hits, misses = await backend_instance.aget_stats(fn_name)
-
     cfg = get_config(meta.package)
-    pattern = f'*:{cfg.key_prefix}{fn_name}|*'
 
-    from .backends.redis import RedisBackend
+    try:
+        backend_instance = await manager.aget_backend(
+            meta.package, meta.backend, meta.ttl)
+        hits, misses = await backend_instance.aget_stats(fn_name)
+    except Exception:
+        if not cfg.fail_open:
+            raise
+        logger.warning(
+            f'Cache stats unavailable for {fn_name!r}; reporting zeros',
+            exc_info=True)
+        return CacheInfo(hits=0, misses=0, currsize=0)
+
+    pattern = make_partial_pattern(fn_name, meta.tag, cfg.key_prefix, meta.ttl)
     try:
         if isinstance(backend_instance, RedisBackend):
             currsize = await _get_cached_currsize_async(
-                backend_instance, meta.package, fn_name, pattern)
+                backend_instance, meta.package, fn_name, meta.ttl, meta.tag, pattern)
         else:
             currsize = await backend_instance.acount(pattern)
     except Exception:
-        if not get_config(meta.package).fail_open:
+        if not cfg.fail_open:
             raise
-        logger.exception('currsize lookup failed; reporting 0')
+        logger.warning(
+            f'Cache currsize unavailable for {fn_name!r}; reporting 0',
+            exc_info=True)
         currsize = 0
 
     return CacheInfo(hits=hits, misses=misses, currsize=currsize)

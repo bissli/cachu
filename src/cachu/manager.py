@@ -10,6 +10,7 @@ from .backends.memory import MemoryBackend
 from .backends.sqlite import SqliteBackend
 from .config import CacheConfig, _get_caller_package, get_config
 from .exception import BackendNotFoundError
+from .util import _normalize_tag
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +27,10 @@ def _warn_if_deadline_unenforceable(cfg: CacheConfig) -> None:
     -----
     - redis-py retries INSIDE a single operation and applies the timeout to
       the connect and the read, so one uninterruptible call costs up to
-      `redis_socket_timeout * (1 + redis_retry_count)`.
+      `redis_socket_timeout * (1 + redis_retry_count)`. cachu shares one
+      connect attempt across every resolved address, so the address count
+      adds a fifth of the budget per extra address rather than multiplying
+      the figure by the address count.
     - `cache_deadline` is only checked between steps, so a call already
       blocked in a socket read runs to completion. With the shipped defaults
       that floor is 5.0 * 4 = 20 s, which swamps a 1 s deadline entirely.
@@ -60,7 +64,7 @@ class CacheManager:
 
     def __init__(self) -> None:
         self.backends: dict[tuple[str | None, str, int], Backend] = {}
-        self._regions: set[tuple[str | None, str, int]] = set()
+        self._regions: dict[tuple[str | None, str, int], set[str]] = {}
         self._lock = threading.RLock()
 
     # Notes:
@@ -126,7 +130,13 @@ class CacheManager:
 
         return backend
 
-    def register_region(self, package: str | None, backend_type: str, ttl: int) -> None:
+    def register_region(
+        self,
+        package: str | None,
+        backend_type: str,
+        ttl: int,
+        tag: str = '',
+    ) -> None:
         """Record that a (package, backend, ttl) cache region exists.
 
         Parameters
@@ -137,6 +147,9 @@ class CacheManager:
             One of VALID_BACKENDS.
         ttl : int
             TTL region identifier (-1 for dynamic TTL).
+        tag : str, default ''
+            Tag the declaring decorator carries. The empty tag records
+            nothing.
 
         Notes
         -----
@@ -146,15 +159,30 @@ class CacheManager:
           been instantiated.
         - This is what lets `cache_clear` reach a region in a cold process
           instead of silently clearing nothing.
+        - Tags ACCUMULATE per region, because one (package, backend, ttl)
+          region is shared by every decorator that resolves to it. Recording
+          them is what lets a tag-scoped clear skip the regions that cannot
+          hold that tag, instead of dialling every backend the package
+          declared anywhere.
+        - The empty tag is not recorded: it is the decorator default, so
+          treating it as a tag would make `tag=''` read as "the untagged
+          caches" while matching everything.
+        - Tags are recorded NORMALIZED, the same form the cache key carries,
+          so the region lookup and the key glob agree. `_normalize_tag` maps
+          '|' to '.', so a region declared as 'a|b' is also reachable as
+          'a.b' - which is what the glob would have matched anyway.
         """
         with self._lock:
-            self._regions.add((package, backend_type, ttl))
+            tags = self._regions.setdefault((package, backend_type, ttl), set())
+            if tag:
+                tags.add(_normalize_tag(tag))
 
     def get_regions(
         self,
         package: str | None,
         backend_types: list[str] | None = None,
         ttl: int | None = None,
+        tag: str | None = None,
     ) -> set[tuple[str | None, str, int]]:
         """Return registered region keys matching the given criteria.
 
@@ -166,6 +194,9 @@ class CacheManager:
             Backend names to keep; all of them if None or empty.
         ttl : int or None, default None
             TTL region to keep; all of them if None.
+        tag : str or None, default None
+            Keep only regions a decorator declared with this tag; all of
+            them if None or empty.
 
         Returns
         -------
@@ -174,10 +205,39 @@ class CacheManager:
         """
         with self._lock:
             return {
-                key for key in self._regions
+                key for key, tags in self._regions.items()
                 if key[0] == package
                 and (not backend_types or key[1] in backend_types)
                 and (ttl is None or key[2] == ttl)
+                and (not tag or _normalize_tag(tag) in tags)
+            }
+
+    def declared_tags(self, package: str | None) -> set[str]:
+        """Return every tag the regions of `package` declared.
+
+        Parameters
+        ----------
+        package : str or None
+            Owning package to match exactly.
+
+        Returns
+        -------
+        set of str
+            Non-empty tags recorded by @cache for this package, stripped of
+            the pipes `_normalize_tag` wraps them in so they read as the
+            caller wrote them.
+
+        Notes
+        -----
+        - Used to explain a clear that matched nothing: a tag is recorded
+          only once its decorator has been imported, so a process that
+          never imported it cannot clear it.
+        """
+        with self._lock:
+            return {
+                tag.strip('|') for key, tags in self._regions.items()
+                if key[0] == package
+                for tag in tags
             }
 
     def materialize(
@@ -185,6 +245,7 @@ class CacheManager:
         package: str | None,
         backend_types: list[str] | None = None,
         ttl: int | None = None,
+        tag: str | None = None,
     ) -> int:
         """Instantiate every registered-but-not-yet-built region matching criteria.
 
@@ -196,6 +257,8 @@ class CacheManager:
             Backend names to build; all of them if None or empty.
         ttl : int or None, default None
             TTL region to build; all of them if None.
+        tag : str or None, default None
+            Build only regions declaring this tag; all of them if None.
 
         Returns
         -------
@@ -211,7 +274,7 @@ class CacheManager:
           succeed on the others.
         """
         built = 0
-        for key in self.get_regions(package, backend_types, ttl):
+        for key in self.get_regions(package, backend_types, ttl, tag):
             try:
                 self.get_backend(*key)
             except Exception:
@@ -225,6 +288,7 @@ class CacheManager:
         package: str | None,
         backend_types: list[str] | None = None,
         ttl: int | None = None,
+        tag: str | None = None,
     ) -> int:
         """Async variant of materialize(), guarded by the async lock.
 
@@ -234,7 +298,7 @@ class CacheManager:
             Number of regions successfully instantiated or already live.
         """
         built = 0
-        for key in self.get_regions(package, backend_types, ttl):
+        for key in self.get_regions(package, backend_types, ttl, tag):
             try:
                 await self.aget_backend(*key)
             except Exception:
@@ -282,8 +346,9 @@ class CacheManager:
         with self._lock:
             if package is None:
                 self._regions.clear()
-            else:
-                self._regions -= {k for k in self._regions if k[0] == package}
+                return
+            for key in [k for k in self._regions if k[0] == package]:
+                del self._regions[key]
 
     def clear(self, package: str | None = None) -> None:
         """Clear backend instances (sync).
@@ -302,20 +367,22 @@ class CacheManager:
         package: str | None,
         backend_types: list[str] | None = None,
         ttl: int | None = None,
+        tag: str | None = None,
     ) -> Iterator[tuple[tuple[str | None, str, int], Backend]]:
         """Iterate over backend instances matching criteria.
         """
-        yield from self._matching(package, backend_types, ttl)
+        yield from self._matching(package, backend_types, ttl, tag)
 
     async def aiter_backends(
         self,
         package: str | None,
         backend_types: list[str] | None = None,
         ttl: int | None = None,
+        tag: str | None = None,
     ) -> AsyncIterator[tuple[tuple[str | None, str, int], Backend]]:
         """Async iterate over backend instances matching criteria.
         """
-        for item in self._matching(package, backend_types, ttl):
+        for item in self._matching(package, backend_types, ttl, tag):
             yield item
 
     def _matching(
@@ -323,6 +390,7 @@ class CacheManager:
         package: str | None,
         backend_types: list[str] | None = None,
         ttl: int | None = None,
+        tag: str | None = None,
     ) -> list[tuple[tuple[str | None, str, int], Backend]]:
         """Snapshot the live backends matching criteria, taken under the lock.
 
@@ -332,13 +400,22 @@ class CacheManager:
           keeps `iter_backends` safe to consume lazily: holding a
           non-reentrant lock across a yield deadlocks any consumer whose
           loop body touches the manager again, which `cache_clear` does.
+        - The tag filter is applied to the LIVE backends, not only to the
+          regions materialized for this call: a region built earlier in the
+          process is live regardless of which tag asked for it, so filtering
+          at materialization alone would still hand a tag-scoped clear the
+          backends it must not touch.
         """
         with self._lock:
+            wanted = None if not tag else _normalize_tag(tag)
+            declaring = None if wanted is None else {
+                key for key, tags in self._regions.items() if wanted in tags}
             return [
                 (key, backend) for key, backend in self.backends.items()
                 if key[0] == package
                 and (not backend_types or key[1] in backend_types)
                 and (ttl is None or key[2] == ttl)
+                and (declaring is None or key in declaring)
             ]
 
     def _detach(self, package: str | None = None) -> list[Backend]:

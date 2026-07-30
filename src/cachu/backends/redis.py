@@ -1,6 +1,7 @@
 """Redis cache backend implementation.
 """
 import asyncio
+import functools
 import logging
 import pickle
 import struct
@@ -23,6 +24,18 @@ _METADATA_FORMAT = 'd'
 _METADATA_SIZE = struct.calcsize(_METADATA_FORMAT)
 _STATS_KEY_PREFIX = 'cachu:stats:'
 _CLEAR_BATCH_SIZE = 500
+_MIN_CONNECT_SLICE = 0.001
+_MIN_CONNECT_FRACTION = 0.2
+
+_CURRSIZE_FRESH_PREFIX = 'cachu:_currsize:'
+_CURRSIZE_LAST_PREFIX = 'cachu:_currsize_last:'
+_CURRSIZE_LOCK_PREFIX = 'cachu:_currsize_lock:'
+
+# Notes:
+# - The cached counts a clear must invalidate, deliberately excluding the
+#   refresh lock: deleting a lock another caller holds is the same fault as
+#   clearing a live dogpile mutex.
+_CURRSIZE_CACHE_PREFIXES = (_CURRSIZE_FRESH_PREFIX, _CURRSIZE_LAST_PREFIX)
 
 
 def _get_redis_module() -> Any:
@@ -50,6 +63,113 @@ def _get_async_redis_module() -> Any:
         ) from e
 
 
+class _ConnectBudgetMixin:
+    """Share one `socket_connect_timeout` across a whole sync connect attempt.
+
+    Notes
+    -----
+    - redis-py's sync `Connection._connect` loops over every address
+      `socket.getaddrinfo` returns and applies `socket_connect_timeout` to
+      EACH of them. An endpoint that resolves to n A records - an
+      ElastiCache serverless endpoint does - therefore costs n budgets per
+      attempt, so a blackholed endpoint blocks for
+      `redis_socket_timeout * n * (1 + redis_retry_count)` where cachu
+      documents and warns about `redis_socket_timeout * (1 + retry_count)`.
+      That is a hang rather than an exception, so neither `fail_open` nor a
+      caller's `try`/`except` shortens it.
+    - The override reports the timeout as "budget left for THIS attempt",
+      which is the value redis-py already re-reads once per address, so the
+      address loop shrinks to fit the budget instead of restarting the clock
+      at every address.
+    - Each address is nevertheless guaranteed `_MIN_CONNECT_FRACTION` of the
+      budget, which is what keeps redis-py's per-address FAILOVER alive. A
+      flat floor of a millisecond does not: measured against a two-address
+      endpoint whose first address blackholes, a healthy second address
+      answering in 1.5 ms or slower became unreachable, so one bad address
+      in an endpoint turned a slow cache into an unavailable one and
+      `fail_open` sent every call to the origin. Any cross-AZ hop is above
+      that threshold. Losing availability to gain a latency bound is the
+      wrong trade.
+    - The cost of that guarantee is that the ceiling is not flat: one
+      attempt costs at most `budget * (1 + (n - 1) * _MIN_CONNECT_FRACTION)`
+      - 1.4x at n=3 rather than the 3x redis-py would spend. A flat ceiling
+      is unreachable together with failover, since an address that hangs for
+      the whole budget leaves nothing for the next one. n=1 is unaffected:
+      the first address always gets the full budget.
+    - `_MIN_CONNECT_SLICE` is a second, absolute floor. `settimeout(0)` puts
+      the socket in NON-BLOCKING mode and a negative value raises
+      ValueError, so a tiny configured budget must still yield something
+      positive.
+    - Only the sync client needs this. redis-py's async `_connect` already
+      wraps its whole address loop in a single
+      `async_timeout(socket_connect_timeout)`.
+    - Bounds the CONNECT, and DNS runs inside it because `getaddrinfo` is
+      that loop's iterable - a slow resolver eats the budget the addresses
+      would have had, down to the per-address guarantee. No redis-py timeout
+      bounds resolution either way, so a wedged resolver stays a host-level
+      concern (`resolv.conf` `timeout`/`attempts`).
+    """
+
+    _socket_connect_timeout: float | None = None
+    _connect_deadline: float | None = None
+
+    @property
+    def socket_connect_timeout(self) -> float | None:
+        """Seconds this address may spend: the budget left, floored at a share of it.
+        """
+        budget = self._socket_connect_timeout
+        if budget is None or self._connect_deadline is None:
+            return budget
+        floor = max(_MIN_CONNECT_SLICE, budget * _MIN_CONNECT_FRACTION)
+        remaining = self._connect_deadline - time.monotonic()
+        return max(floor, min(budget, remaining))
+
+    @socket_connect_timeout.setter
+    def socket_connect_timeout(self, value: float | None) -> None:
+        """Store the configured budget, mirroring redis-py's own setter.
+        """
+        self._socket_connect_timeout = value
+
+    def _connect(self) -> Any:
+        """Open the budget, delegate to redis-py, and always close it again.
+        """
+        budget = self._socket_connect_timeout
+        if not budget:
+            return super()._connect()
+
+        self._connect_deadline = time.monotonic() + budget
+        try:
+            return super()._connect()
+        finally:
+            self._connect_deadline = None
+
+
+@functools.lru_cache(maxsize=None)
+def _connect_budget_class(base: type) -> type:
+    """Build the `_ConnectBudgetMixin` subclass of a redis-py connection class.
+
+    Parameters
+    ----------
+    base : type
+        Connection class redis-py resolved for the URL - `Connection`,
+        `SSLConnection` or `UnixDomainSocketConnection`.
+
+    Returns
+    -------
+    type
+        Subclass of `base` whose connect attempt is bounded as a whole.
+
+    Notes
+    -----
+    - Derived from whatever the pool resolved rather than chosen from the
+      URL scheme, so TLS and unix-socket URLs keep their own connection
+      behaviour and only the timeout accounting changes.
+    - Cached, so one class exists per base and `isinstance` checks and
+      connection construction stay cheap.
+    """
+    return type(f'ConnectBudget{base.__name__}', (_ConnectBudgetMixin, base), {})
+
+
 def get_redis_client(
     url: str,
     health_check_interval: int = 30,
@@ -57,11 +177,38 @@ def get_redis_client(
     retry_count: int = 3,
 ) -> 'redis.Redis':
     """Create a Redis client from URL with connection resilience.
+
+    Parameters
+    ----------
+    url : str
+        Redis URL, `redis://`, `rediss://` or `unix://`.
+    health_check_interval : int, default 30
+        Seconds between redis-py connection health checks.
+    socket_timeout : float, default 5.0
+        Passed as both `socket_timeout` and `socket_connect_timeout`, and
+        shared across one whole connect attempt rather than applied per
+        resolved address.
+    retry_count : int, default 3
+        Retry attempts redis-py makes per operation.
+
+    Returns
+    -------
+    redis.Redis
+        Client whose pool builds connect-budgeted connections.
+
+    Notes
+    -----
+    - One connect attempt costs at most
+      `socket_timeout * (1 + (n - 1) * _MIN_CONNECT_FRACTION)` for an
+      endpoint resolving to n addresses - 1.4x the budget at n=3 - against
+      the `socket_timeout * n` redis-py would spend. The residual term is
+      the per-address guarantee that keeps failover working; see
+      `_ConnectBudgetMixin`.
     """
     redis_module = _get_redis_module()
     retry = redis_module.retry.Retry(
         redis_module.backoff.ExponentialBackoff(), retries=retry_count)
-    return redis_module.from_url(
+    client = redis_module.from_url(
         url,
         health_check_interval=health_check_interval,
         socket_connect_timeout=socket_timeout,
@@ -69,6 +216,9 @@ def get_redis_client(
         retry_on_timeout=True,
         retry=retry,
     )
+    pool = client.connection_pool
+    pool.connection_class = _connect_budget_class(pool.connection_class)
+    return client
 
 
 def get_async_redis_client(
@@ -233,7 +383,25 @@ class RedisBackend(Backend):
     def clear(self, pattern: str | None = None) -> int:
         """Clear entries matching pattern. Returns count of cleared entries.
 
-        Single-key UNLINKs are pipelined to stay legal on Redis Cluster.
+        Parameters
+        ----------
+        pattern : str or None, default None
+            Redis glob to match. None means the ENTIRE logical DB, cachu-owned
+            or not.
+
+        Returns
+        -------
+        int
+            Number of keys UNLINKed.
+
+        Notes
+        -----
+        - Single-key UNLINKs are pipelined to stay legal on Redis Cluster.
+        - `cache_clear` never passes None: it derives a region-scoped glob
+          from cachu's own key shape, so a library-level clear cannot reach a
+          key cachu did not write. None stays available on the backend itself
+          because a caller reaching for a backend object directly is asking
+          for exactly that store.
         """
         if pattern is None:
             pattern = '*'
@@ -286,11 +454,25 @@ class RedisBackend(Backend):
 
     def clear_stats(self, fn_name: str | None = None) -> None:
         """Clear stats for a function, or all stats if fn_name is None.
+
+        Notes
+        -----
+        - Also drops the cached `currsize` counts, which are stats too: they
+          are served from a stale-while-revalidate cache, so a clear that
+          left them standing would make `cache_info` report the pre-clear
+          size for up to `_CURRSIZE_FRESH_TTL` seconds.
+        - The refresh LOCK is deliberately left alone. Deleting a lock
+          another caller holds is the same fault as clearing a live dogpile
+          mutex; it self-heals in at most `_CURRSIZE_LOCK_TTL` and only
+          costs one extra scan.
         """
         if fn_name:
             self.client.delete(f'{_STATS_KEY_PREFIX}{fn_name}')
         else:
             for key in self.client.scan_iter(match=f'{_STATS_KEY_PREFIX}*'):
+                self.client.delete(key)
+        for prefix in _CURRSIZE_CACHE_PREFIXES:
+            for key in self.client.scan_iter(match=f'{prefix}*'):
                 self.client.delete(key)
 
     # ===== Async interface =====
@@ -346,7 +528,20 @@ class RedisBackend(Backend):
     async def aclear(self, pattern: str | None = None) -> int:
         """Async clear entries matching pattern. Returns count of cleared entries.
 
-        Single-key UNLINKs are pipelined to stay legal on Redis Cluster.
+        Parameters
+        ----------
+        pattern : str or None, default None
+            Redis glob to match. None means the ENTIRE logical DB, exactly as
+            in the sync `clear`; `async_cache_clear` never passes it.
+
+        Returns
+        -------
+        int
+            Number of keys UNLINKed.
+
+        Notes
+        -----
+        - Single-key UNLINKs are pipelined to stay legal on Redis Cluster.
         """
         client = self._get_async_client()
         if pattern is None:
@@ -406,12 +601,21 @@ class RedisBackend(Backend):
 
     async def aclear_stats(self, fn_name: str | None = None) -> None:
         """Async clear stats for a function, or all stats if fn_name is None.
+
+        Notes
+        -----
+        - Drops the cached `currsize` counts alongside the counters, and
+          leaves the refresh lock alone, exactly as the sync `clear_stats`
+          does.
         """
         client = self._get_async_client()
         if fn_name:
             await client.delete(f'{_STATS_KEY_PREFIX}{fn_name}')
         else:
             async for key in client.scan_iter(match=f'{_STATS_KEY_PREFIX}*'):
+                await client.delete(key)
+        for prefix in _CURRSIZE_CACHE_PREFIXES:
+            async for key in client.scan_iter(match=f'{prefix}*'):
                 await client.delete(key)
 
     # ===== Lifecycle =====

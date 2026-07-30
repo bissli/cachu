@@ -52,22 +52,22 @@ cachu.configure(
 
 ### Configuration Options
 
-| Option                        | Default                      | Description                                                                                                                                                                   |
-| ----------------------------- | ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `backend_default`             | `'memory'`                   | Default backend: `'memory'`, `'file'`, `'redis'`, or `'null'`                                                                                                                 |
-| `key_prefix`                  | `''`                         | Prefix for all cache keys (useful for versioning)                                                                                                                             |
-| `file_dir`                    | `'/tmp'`                     | Directory for file-based caches                                                                                                                                               |
-| `redis_url`                   | `'redis://localhost:6379/0'` | Redis connection URL (supports `rediss://` for TLS)                                                                                                                           |
-| `package`                     | caller's package             | Which package's configuration to set; a parameter, not a stored field ([details](#package-isolation))                                                                         |
-| `fail_open`                   | `True`                       | Degrade cache faults to a miss instead of raising ([details](#failure-semantics))                                                                                             |
-| `cache_deadline`              | `None`                       | Cumulative cache work per call, checked *between* backend operations - it cannot interrupt one already in flight ([details](#bounding-cache-latency))                         |
-| `lock_timeout`                | `10.0`                       | Seconds to wait for the per-key dogpile mutex; **lowering it increases** backing-store load under the default `on_lock_timeout='run'` ([details](#dogpile-and-lock-timeouts)) |
-| `on_lock_timeout`             | `'run'`                      | `'run'` or `'raise'` when the mutex is missed ([details](#dogpile-and-lock-timeouts))                                                                                         |
-| `memory_maxsize`              | `None`                       | LRU bound for the memory backend ([details](#bounding-the-memory-backend))                                                                                                    |
-| `memory_sweep_interval`       | `60.0`                       | Seconds between expired-entry sweeps of the memory backend ([details](#bounding-the-memory-backend))                                                                          |
-| `redis_socket_timeout`        | `5.0`                        | Socket timeout, applied to **both** connect and read; the only thing that bounds one in-flight operation ([details](#bounding-cache-latency))                                 |
-| `redis_retry_count`           | `3`                          | redis-py retries per operation - they run *inside* one operation, so they multiply its worst case ([details](#bounding-cache-latency))                                        |
-| `redis_health_check_interval` | `30`                         | Seconds between redis-py connection health checks                                                                                                                             |
+| Option                        | Default                      | Description                                                                                                                                                                                                                     |
+| ----------------------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `backend_default`             | `'memory'`                   | Default backend: `'memory'`, `'file'`, `'redis'`, or `'null'`                                                                                                                                                                   |
+| `key_prefix`                  | `''`                         | Prefix for all cache keys (useful for versioning)                                                                                                                                                                               |
+| `file_dir`                    | `'/tmp'`                     | Directory for file-based caches                                                                                                                                                                                                 |
+| `redis_url`                   | `'redis://localhost:6379/0'` | Redis connection URL (supports `rediss://` for TLS)                                                                                                                                                                             |
+| `package`                     | caller's package             | Which package's configuration to set; a parameter, not a stored field ([details](#package-isolation))                                                                                                                           |
+| `fail_open`                   | `True`                       | Degrade cache faults to a miss instead of raising ([details](#failure-semantics))                                                                                                                                               |
+| `cache_deadline`              | `None`                       | Cumulative cache work per call, checked *between* backend operations - it cannot interrupt one already in flight ([details](#bounding-cache-latency))                                                                           |
+| `lock_timeout`                | `10.0`                       | Seconds to wait for the per-key dogpile mutex; **lowering it increases** backing-store load under the default `on_lock_timeout='run'` ([details](#dogpile-and-lock-timeouts))                                                   |
+| `on_lock_timeout`             | `'run'`                      | `'run'` or `'raise'` when the mutex is missed ([details](#dogpile-and-lock-timeouts))                                                                                                                                           |
+| `memory_maxsize`              | `None`                       | LRU bound for the memory backend ([details](#bounding-the-memory-backend))                                                                                                                                                      |
+| `memory_sweep_interval`       | `60.0`                       | Seconds between expired-entry sweeps of the memory backend ([details](#bounding-the-memory-backend))                                                                                                                            |
+| `redis_socket_timeout`        | `5.0`                        | Socket timeout, applied to **both** connect and read, and shared across one whole connect attempt rather than restarted per resolved address; the only thing that bounds one in-flight operation ([details](#bounding-cache-latency)) |
+| `redis_retry_count`           | `3`                          | redis-py retries per operation - they run *inside* one operation, so they multiply its worst case ([details](#bounding-cache-latency))                                                                                          |
+| `redis_health_check_interval` | `30`                         | Seconds between redis-py connection health checks                                                                                                                                                                               |
 
 `configure()` only changes the settings you pass, and `None` means "leave unchanged" -
 so an option whose default is `None` cannot be reset through the public API once set.
@@ -505,6 +505,23 @@ info = cache_info(get_user)
 print(f"Hits: {info.hits}, Misses: {info.misses}, Size: {info.currsize}")
 ```
 
+`cache_info` is safe to put behind a status endpoint:
+
+- **It obeys `fail_open`.** A backend fault costs a degraded `CacheInfo`, not an
+  exception, exactly as it costs a miss on the read path. A failed stats read reports
+  zeros; a failed `currsize` reports `0` for that field alone and keeps the counters the
+  backend did answer. With `fail_open=False` both propagate instead.
+- **`currsize` does not scan Redis on every call.** It is served from a 60-second
+  stale-while-revalidate cache shared by the sync and async paths, so repeated views cost
+  one keyspace `SCAN` per minute per function rather than one per call. One caller per
+  window pays it; the rest are answered from the last-known value. On memory and file
+  backends the count is cheap and taken directly.
+- **`currsize` counts this region only.** It uses the same region-scoped glob `.clear()`
+  does, so it excludes entries left behind by a previous TTL of the same function and the
+  `lock:` keys of live dogpile mutexes.
+- On Redis `currsize` is approximate by nature: it is a point-in-time `SCAN` of a
+  keyspace other processes are writing to.
+
 ### Excluding Parameters
 
 Exclude parameters from the cache key:
@@ -566,30 +583,58 @@ cache_clear()
 
 **Clearing behavior:**
 
-| `ttl`  | `tag`     | `backend`  | Behavior                               |
-| ------ | --------- | ---------- | -------------------------------------- |
-| `300`  | `None`    | `'memory'` | All keys in 300s memory region         |
-| `300`  | `'users'` | `'memory'` | Only "users" tag in 300s memory region |
-| `None` | `None`    | `'memory'` | All memory regions                     |
-| `None` | `'users'` | `None`     | "users" tag across all backends        |
+| `ttl`  | `tag`     | `backend`  | Behavior                                     |
+| ------ | --------- | ---------- | -------------------------------------------- |
+| `300`  | `None`    | `'memory'` | All keys in 300s memory region               |
+| `300`  | `'users'` | `'memory'` | Only "users" tag in 300s memory region       |
+| `None` | `None`    | `'memory'` | All memory regions                           |
+| `None` | `'users'` | `None`     | "users" tag, in the regions that declared it |
 
-**Clearing works in a cold process.** `@cache` registers its
-`(package, backend, ttl)` region when the decorator runs, which is import time, so
-`cache_clear` can reach a region even if no cached call has happened yet. This matters
-most in tests: a setup fixture that clears against a shared Redis or SQLite backend
-really clears it, instead of silently no-opping and letting a previous run's value be
-served.
+**A clear can only ever delete keys cachu wrote.** Every glob is built from cachu's own
+key shape, `<region>:<key_prefix><fn_name>|<params>`, region by region - so pointing
+cachu at a Redis DB you share with anything else is safe. `global_clear=True` widens the
+**key prefix**, not the namespace: it exists to reach entries written under a different
+`key_prefix`, and still cannot touch a foreign key, another TTL region, or the `lock:`
+key of a dogpile mutex a live caller is holding.
 
-That reach has a cost: an unscoped `cache_clear()` instantiates every declared region,
-so it creates the SQLite file for any `backend='file'` region and connects to any
-`backend='redis'` region - spending that backend's full socket budget if it is
-unreachable. A failure on a backend you did not name is logged and skipped rather than
-raised, but the time is still spent. Scope the call
-(`cache_clear(backend='memory', ttl=300)`) if you do not want that.
+A `key_prefix` or `tag` containing a glob metacharacter (`*`, `?`, `[`) is escaped before
+it goes into a pattern, so `key_prefix='app[dev]:'` clears its own entries rather than
+none of them, and `key_prefix='p*x:'` does not reach `prod-x:`. Parameter values were
+already escaped on both sides.
+
+**A `tag=` clear visits only the regions that declared that tag.** `@cache` records its
+tag on its `(package, backend, ttl)` region at decoration time, so a tag pinned to
+`backend='memory'` does no network I/O even in a package whose `configure()` sets
+`redis_url` for unrelated caches:
+
+```python
+@cache(ttl=60, tag='auth', backend='memory')     # pinned to memory
+def is_authorized(token: str) -> bool: ...
+
+cachu.configure(redis_url='redis://cache:6379/0')  # for other caches
+
+cache_clear(tag='auth')   # touches memory only; never dials Redis
+```
+
+**Clearing works in a cold process.** `@cache` registers its region when the decorator
+runs, which is import time, so `cache_clear` can reach a region even if no cached call
+has happened yet. This matters most in tests: a setup fixture that clears against a
+shared Redis or SQLite backend really clears it, instead of silently no-opping and
+letting a previous run's value be served.
+
+That reach has a cost for an **untagged** clear: `cache_clear()` instantiates every
+declared region, so it creates the SQLite file for any `backend='file'` region and
+connects to any `backend='redis'` region - spending that backend's full socket budget if
+it is unreachable. A failure on a backend you did not name is logged and skipped rather
+than raised, but the time is still spent. Scope the call by `tag=`, or by
+`backend=`/`ttl=`, if you do not want that.
 
 A return of `0` means "no entries matched". If no region matched at all - usually a
-misspelled `package` or `backend` - a warning is logged on the `cachu.operations`
-logger, so the two cases stay distinguishable.
+misspelled `package`, `backend` or `tag` - a warning is logged on the `cachu.operations`
+logger, so the two cases stay distinguishable. Because a tag narrows to the regions that
+declared it, that warning also names the tags the package **did** declare: a tag is
+recorded only once its decorator has been imported, so an admin process that clears a
+tag it never imported clears nothing, and says so.
 
 ### Cross-Module Clearing
 
@@ -686,15 +731,20 @@ propagates even under `fail_open=True`, because shedding load is a decision you 
 into rather than a fault. It also escapes `_overwrite_cache=True` and `.refresh()`.
 
 The helper methods (`.get()`, `.set()`, `.clear()`) and the module-level CRUD functions
-are explicit cache operations, not cached calls: they are governed by neither
-`fail_open` nor `cache_deadline` and report backend errors directly. `.refresh()` is the
-exception - it clears and then makes a real cached call, so its second half obeys both.
+(`cache_get`, `cache_set`, `cache_delete`, `cache_clear`) are explicit cache operations,
+not cached calls: they are governed by neither `fail_open` nor `cache_deadline` and
+report backend errors directly. Two exceptions: `.refresh()` clears and then makes a real
+cached call, so its second half obeys both; and `cache_info` / `async_cache_info` obey
+`fail_open`, because a status view asking "how is the cache doing" is better answered
+with zeros than with the exception it is asking about.
 
 ### Bounding Cache Latency
 
 Redis timeout budgets compound rather than add:
 
-- `redis_socket_timeout` applies to **both** the connect and the read.
+- `redis_socket_timeout` applies to **both** the connect and the read, and cachu shares
+  it across one whole connect attempt rather than restarting it per resolved address -
+  see [below](#what-bounds-the-connect).
 - redis-py retries each operation `redis_retry_count` times with exponential backoff,
   and those retries run *inside* one logical operation rather than around it.
 - A miss performs six Redis round trips: get, mutex acquire (`SET NX`), the post-lock
@@ -744,8 +794,9 @@ operations can stack on one call:
 With the shipped defaults T is `5.0 * 4 = 20s`, so `cache_deadline=1.0` by itself still
 admits a 21-second call, or 41 seconds when the lock was held. Treat `T` as a floor
 rather than an exact figure: redis-py adds backoff sleeps between retries, a
-health-checked connection can spend an extra round trip on a `PING`, and the retry
-semantics differ across the `redis>=4.2.0` range cachu accepts. cachu logs a warning the
+health-checked connection can spend an extra round trip on a `PING`, DNS resolution is
+bounded by your resolver rather than by any redis-py timeout, and the retry semantics
+differ across the `redis>=4.2.0` range cachu accepts. cachu logs a warning the
 first time it builds a Redis backend for a package whose deadline the Redis budgets
 cannot honour - on the first Redis-backed call, not inside `configure()`, and not at all
 for a package that never touches Redis. Set all three together:
@@ -761,6 +812,45 @@ cachu.configure(
 
 `redis_retry_count=0` is the one setting that makes the arithmetic exact, since the
 retries are what compound.
+
+#### What bounds the connect
+
+redis-py's sync connect loops over every address `getaddrinfo` returns and applies
+`socket_connect_timeout` to **each** of them. An endpoint with several A records - an
+ElastiCache serverless endpoint has them - therefore multiplied the budget by the address
+count, so a blackholed endpoint cost `redis_socket_timeout * n * (1 + redis_retry_count)`
+per operation. Since that is a hang rather than an exception, neither `fail_open` nor
+`cache_deadline` could shorten it.
+
+cachu now hands redis-py the budget **remaining** for the attempt rather than a fresh
+budget per address, with a floor of one fifth of the budget per address. So for an
+endpoint resolving to `n` addresses, one connect attempt costs at most:
+
+    redis_socket_timeout * (1 + (n - 1) * 0.2)
+
+which is `1.4 x` the budget at n=3 and `2.4 x` at n=8, against the `3 x` and `8 x`
+redis-py would spend. `n = 1` is unaffected - the first address always gets the whole
+budget.
+
+**Why the per-address floor, and why the ceiling is not flat.** A flat one-budget ceiling
+is not compatible with failover: an address that hangs for the whole budget leaves
+nothing for the next one. Giving later addresses only a token slice measurably destroys
+redis-py's per-address failover - with a 1 ms slice, a healthy second address answering
+in 1.5 ms or slower became **unreachable**, so one bad address in an endpoint (a first
+AAAA record in a container without IPv6 egress is the everyday case) turned a slow cache
+into an unavailable one, and `fail_open` then sent every call to the origin. Any
+cross-AZ hop is above that threshold. Trading availability for a tighter latency bound
+is the wrong way round, so the guaranteed share stays and the ceiling carries the
+`(n - 1)` term.
+
+Two further caveats:
+
+- **DNS is not covered, and runs inside the budget.** `getaddrinfo` is that loop's
+  iterable, so a slow resolver eats the budget the addresses would have had, down to the
+  per-address floor. No redis-py timeout bounds resolution either way; a wedged resolver
+  is a host-level concern (`resolv.conf` `timeout` and `attempts`).
+- **The async client already had this guarantee** - redis-py wraps its whole async
+  connect in a single timeout - so this changes the sync path only.
 
 cachu deliberately does **not** derive `redis_socket_timeout` from `cache_deadline` for
 you. Doing so was measured to override an explicitly configured value and, against a
@@ -1064,12 +1154,13 @@ from cachu import (
 - **Validation callbacks**: Validate entries before returning
 - **Per-call control**: Skip or overwrite cache per call
 - **Helper methods**: `.get()`, `.set()`, `.clear()`, `.refresh()`, `.original()` on decorated functions
-- **Statistics**: Track hits, misses, and cache size
+- **Statistics**: Track hits, misses, and cache size; fail-open and scan-free behind a status endpoint
 - **Intelligent filtering**: Auto-excludes `self`, `cls`, connections, and `_` params
 - **Fail-open by default**: Backend, mutex and read faults degrade to a miss; write and stat faults are logged and never raised
-- **Bounded latency**: `cache_deadline` caps cumulative cache work between operations; pair it with `redis_socket_timeout` to bound a single blocked call
+- **Bounded latency**: `cache_deadline` caps cumulative cache work between operations; pair it with `redis_socket_timeout`, which bounds a single blocked call and is shared across one whole connect attempt
 - **Load shedding**: `on_lock_timeout='raise'` sheds waiters instead of stampeding
 - **Bounded memory**: Optional LRU `memory_maxsize` plus amortized expiry sweeps
 - **Scoped disable**: Bypass caching globally, or by package or tag
 - **Cold-process clearing**: `cache_clear` reaches regions declared but not yet used
+- **Namespaced clearing**: a clear only ever matches cachu's own key shape, and a `tag=` clear visits only the regions declaring that tag
 - **Redis TLS**: Supports `rediss://` URLs for secure connections

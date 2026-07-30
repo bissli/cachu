@@ -28,7 +28,20 @@ class CacheEntry:
 
 @dataclass
 class CacheInfo:
-    """Cache statistics for a decorated function (Redis currsize is approximate).
+    """Cache statistics for one decorated function.
+
+    Attributes
+    ----------
+    hits : int
+        Cache hits recorded for the function, 0 when the stats read failed
+        under `fail_open`.
+    misses : int
+        Cache misses recorded for the function, 0 under the same condition.
+    currsize : int
+        Live entries in the function's own TTL region. Approximate on Redis:
+        it comes from a point-in-time SCAN of a keyspace other processes are
+        writing to, served from a 60-second stale-while-revalidate cache, and
+        is 0 when the count failed under `fail_open`.
     """
     hits: int
     misses: int

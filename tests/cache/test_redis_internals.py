@@ -2,10 +2,9 @@
 
 These use lightweight fake clients so no real Redis is required.
 """
+import asyncio
 import fnmatch
 import logging
-
-import asyncio
 
 from cachu.backends.redis import RedisBackend
 
@@ -236,7 +235,7 @@ async def test_currsize_cold_start_uses_mget_and_returns_zero():
     backend = _CurrsizeFakeBackend()
 
     result = await decorator._get_cached_currsize_async(
-        backend, 'pkg', 'fn', '*:test:fn|*')
+        backend, 'pkg', 'fn', 60, '', '1m:test:fn|*')
 
     assert result == 0
     await asyncio.gather(*list(decorator._background_tasks))
@@ -250,7 +249,7 @@ async def test_currsize_refresh_task_is_strongly_referenced():
     decorator._background_tasks.clear()
     backend = _CurrsizeFakeBackend()
 
-    await decorator._get_cached_currsize_async(backend, 'pkg', 'fn', '*:test:fn|*')
+    await decorator._get_cached_currsize_async(backend, 'pkg', 'fn', 60, '', '1m:test:fn|*')
 
     assert len(decorator._background_tasks) >= 1
     await asyncio.gather(*list(decorator._background_tasks))

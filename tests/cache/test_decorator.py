@@ -11,7 +11,7 @@ def test_currsize_keys_share_one_cluster_slot():
     """The fresh/last/lock currsize keys must share a hash tag so a multi-key
     MGET over them stays legal on Redis Cluster (cross-slot otherwise 500s).
     """
-    keys = _currsize_keys('pkg', 'fn')
+    keys = _currsize_keys('pkg', 'fn', 60)
     tags = [re.search(r'\{(.*)\}', k).group(1) for k in keys]
     assert tags[0] and len(set(tags)) == 1
 

@@ -5,8 +5,7 @@ import asyncio
 import pytest
 import redis as redis_lib
 from cachu.backends.redis import RedisBackend
-from cachu.decorator import _CURRSIZE_FRESH_TTL
-from cachu.decorator import _currsize_keys
+from cachu.decorator import _CURRSIZE_FRESH_TTL, _currsize_keys
 from cachu.decorator import _get_cached_currsize_async
 
 pytestmark = pytest.mark.redis
@@ -59,9 +58,9 @@ async def test_currsize_cold_start_returns_zero_and_schedules_refresh(backend, s
     sync_redis.set('1m:test:fn|x=2', b'cached2')
 
     pattern = '*:test:fn|*'
-    fresh_key, last_key, lock_key = _currsize_keys('pkg', 'fn')
+    fresh_key, last_key, lock_key = _currsize_keys('pkg', 'fn', 60)
 
-    result = await _get_cached_currsize_async(backend, 'pkg', 'fn', pattern)
+    result = await _get_cached_currsize_async(backend, 'pkg', 'fn', 60, '', pattern)
     assert result == 0
 
     for _ in range(50):
@@ -78,7 +77,7 @@ async def test_currsize_cold_start_returns_zero_and_schedules_refresh(backend, s
 async def test_currsize_serves_fresh_value(backend, sync_redis):
     """A fresh cached value is returned without invoking the slow scan.
     """
-    fresh_key, _, _ = _currsize_keys('pkg', 'fn')
+    fresh_key, _, _ = _currsize_keys('pkg', 'fn', 60)
     sync_redis.set(fresh_key, 42, ex=_CURRSIZE_FRESH_TTL)
 
     async def boom(*args, **kwargs):
@@ -86,19 +85,19 @@ async def test_currsize_serves_fresh_value(backend, sync_redis):
 
     backend.acount = boom
 
-    assert await _get_cached_currsize_async(backend, 'pkg', 'fn', '*:test:fn|*') == 42
+    assert await _get_cached_currsize_async(backend, 'pkg', 'fn', 60, '', '1m:test:fn|*') == 42
 
 
 @pytest.mark.asyncio
 async def test_currsize_serves_stale_during_refresh(backend, sync_redis):
     """No fresh key but a last-known value: returns stale immediately and refreshes.
     """
-    fresh_key, last_key, _ = _currsize_keys('pkg', 'fn')
+    fresh_key, last_key, _ = _currsize_keys('pkg', 'fn', 60)
     sync_redis.set(last_key, 99)
     for i in range(3):
         sync_redis.set(f'1m:test:fn|x={i}', b'cached')
 
-    result = await _get_cached_currsize_async(backend, 'pkg', 'fn', '*:test:fn|*')
+    result = await _get_cached_currsize_async(backend, 'pkg', 'fn', 60, '', '1m:test:fn|*')
     assert result == 99
 
     for _ in range(50):
@@ -116,7 +115,7 @@ async def test_currsize_concurrent_misses_run_one_scan(backend, sync_redis):
     """
     sync_redis.set('1m:test:fn|x=1', b'cached')
 
-    fresh_key, _, _ = _currsize_keys('pkg', 'fn')
+    fresh_key, _, _ = _currsize_keys('pkg', 'fn', 60)
     scan_calls = 0
     original_acount = backend.acount
 
@@ -129,7 +128,7 @@ async def test_currsize_concurrent_misses_run_one_scan(backend, sync_redis):
     backend.acount = counting_acount
 
     results = await asyncio.gather(*[
-        _get_cached_currsize_async(backend, 'pkg', 'fn', '*:test:fn|*')
+        _get_cached_currsize_async(backend, 'pkg', 'fn', 60, '', '1m:test:fn|*')
         for _ in range(10)
         ])
 

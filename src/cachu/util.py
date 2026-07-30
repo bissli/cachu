@@ -10,6 +10,50 @@ from .api import CacheEntry
 _KEY_ESCAPE = {'%': '%25', ' ': '%20', '=': '%3D', '|': '%7C', '*': '%2A', '?': '%3F', '[': '%5B', ']': '%5D'}
 _KEY_ESCAPE_TABLE = str.maketrans({ord(k): v for k, v in _KEY_ESCAPE.items()})
 
+_GLOB_ESCAPE = {'*': '[*]', '?': '[?]', '[': '[[]'}
+_GLOB_ESCAPE_TABLE = str.maketrans({ord(k): v for k, v in _GLOB_ESCAPE.items()})
+
+
+def _escape_glob(text: str) -> str:
+    """Escape glob metacharacters so `text` can only match itself.
+
+    Parameters
+    ----------
+    text : str
+        Literal fragment being interpolated into a clear or count pattern.
+
+    Returns
+    -------
+    str
+        The fragment with '*', '?' and '[' neutralised.
+
+    Notes
+    -----
+    - Applied to the configured `key_prefix` and to a tag on the PATTERN
+      side only. A key holds both literally, and `_render_value` already
+      percent-escapes the same characters inside parameter values, so the
+      two sides agree.
+    - Single-character classes are the one escape form shared by all three
+      matchers cachu targets: fnmatch (memory), SQLite GLOB (file) and
+      Redis's own glob. A backslash would work on Redis and fail on the
+      other two.
+    - ']' needs no escaping: outside a class it is already literal in all
+      three.
+    - '\' is deliberately NOT escaped, because no single form works
+      everywhere: matching a literal backslash needs '\\' on Redis and a
+      bare '\' on fnmatch and SQLite GLOB, and each form fails on the
+      other engine (measured). A prefix, tag or argument holding a
+      backslash - a Windows path is the realistic case - therefore does not
+      clear on Redis. Fixing it needs a per-backend pattern dialect rather
+      than one escape table.
+    - Without this, `key_prefix='app[dev]:'` turns into a character class
+      and every clear silently matches NOTHING, while `key_prefix='p*x:'`
+      matches 'prod-x:' as well - one prefix's clear deleting another
+      prefix's entries, which is the same "reaches keys it does not own"
+      fault that region scoping exists to prevent.
+    """
+    return text.translate(_GLOB_ESCAPE_TABLE)
+
 
 def _stable_repr(value: Any) -> str:
     """Render a value to a deterministic, restart-stable string.
@@ -65,14 +109,6 @@ def _normalize_tag(tag: str) -> str:
     tag = tag.strip('|')
     tag = tag.replace('|', '.')
     return f'|{tag}|'
-
-
-def _tag_to_pattern(tag: str | None) -> str | None:
-    """Convert tag to cache key pattern for clearing.
-    """
-    if not tag:
-        return None
-    return f'*{_normalize_tag(tag)}*'
 
 
 def make_key_generator(
@@ -209,7 +245,30 @@ def mangle_key(key: str, key_prefix: str, ttl: int) -> str:
 
 def _seconds_to_region_name(seconds: int) -> str:
     """Convert seconds to a human-readable region name.
+
+    Parameters
+    ----------
+    seconds : int
+        TTL of the region. A float is truncated to an int first.
+
+    Returns
+    -------
+    str
+        Region segment of a mangled key, e.g. '30s', '5m', '1h', '1d', or
+        'dynamic' for the callable-ttl sentinel -1.
+
+    Notes
+    -----
+    - The truncation is what keeps the name a function of the REGION rather
+      than of the literal a decorator was written with. `manager` keys its
+      regions by a `(package, backend, ttl)` tuple, and 300 == 300.0 hashes
+      equal, so `@cache(ttl=300)` and `@cache(ttl=300.0)` - the second is
+      what `timedelta.total_seconds()` or a JSON config yields - share ONE
+      region. Without truncation they wrote keys under '5m' and '5.0m' while
+      the region recorded whichever imported first, so every clear built one
+      name and could never match the other's entries.
     """
+    seconds = int(seconds)
     if seconds == -1:
         return 'dynamic'
     if seconds < 60:
@@ -222,6 +281,58 @@ def _seconds_to_region_name(seconds: int) -> str:
         return f'{seconds // 86400}d'
 
 
+def make_clear_pattern(
+    tag: str | None,
+    key_prefix: str,
+    ttl: int,
+    global_clear: bool = False,
+) -> str:
+    """Build the glob a clear applies to one (backend, ttl) cache region.
+
+    Parameters
+    ----------
+    tag : str or None
+        Tag to narrow to, or None for every entry of the region.
+    key_prefix : str
+        Configured key prefix; skipped when `global_clear` is set.
+    ttl : int
+        TTL of the region being cleared, which names its key segment.
+    global_clear : bool, default False
+        Match every key prefix rather than only the configured one.
+
+    Returns
+    -------
+    str
+        Glob matching only keys of cachu's own shape,
+        `<region>:<key_prefix><fn_name>|<tag>|<params>`.
+
+    Notes
+    -----
+    - Never returns None and never returns '*'. A pattern that widened to
+      '*' made `RedisBackend.clear` SCAN and UNLINK every key in the logical
+      DB, including keys cachu never wrote - reachable with nothing more
+      exotic than the default `key_prefix=''`.
+    - `global_clear` widens the PREFIX, not the namespace: it exists to
+      reach entries written under another `key_prefix`, not another
+      library's keys.
+    - The `|` is what pins the shape. `mangle_key` always emits the
+      `fn_name|params` separator, so a foreign key that merely opens with a
+      region-like segment cannot match, and neither can the `lock:` key of
+      a dogpile mutex a live caller is holding.
+    - One glob per region rather than one shared `*:` glob: the region
+      segment comes from the TTL of the region being cleared, so a 5m clear
+      cannot reach the 1h entries of the same function.
+    - `key_prefix` and `tag` are glob-escaped, so a prefix or tag containing
+      '*', '?' or '[' matches itself rather than its neighbours or nothing
+      at all.
+    """
+    region = _seconds_to_region_name(ttl)
+    prefix = '' if global_clear else _escape_glob(key_prefix)
+    if tag:
+        return f'{region}:{prefix}*{_escape_glob(_normalize_tag(tag))}*'
+    return f'{region}:{prefix}*|*'
+
+
 def make_partial_pattern(
     fn_name: str,
     tag: str,
@@ -230,14 +341,30 @@ def make_partial_pattern(
     global_clear: bool = False,
     **kwargs: Any,
 ) -> str:
-    """Build a glob pattern for clearing cache entries.
+    """Build a glob pattern for one decorated function's entries.
 
     Constructs patterns matching the key format produced by
     make_key_generator + mangle_key. Supports exact (all params),
     partial (some params), and blanket (no params) matching.
+
+    Notes
+    -----
+    - `key_prefix` and `tag` are glob-escaped for the same reason
+      `make_clear_pattern` escapes them: unescaped, a prefix or tag holding
+      '*', '?' or '[' would either match its neighbours or match nothing.
+      `fn_name` is a Python identifier and needs no escaping, and parameter
+      values are already escaped by `_render_value` on both sides.
+    - `global_clear` drops the `key_prefix` and keeps the region segment,
+      which is the whole of its documented contract. Dropping the region as
+      well left the glob unanchored at the front: `*fn_name|*` matched a
+      foreign `worker:fn_name|job-7`, the same function's entries in other
+      TTL regions, and the `lock:` key of a mutex a live caller was holding
+      - so `.clear(_global=True)` could release someone else's lock. A
+      decorated function only ever writes into its own region, so anchoring
+      costs nothing it was meant to reach.
     """
     region = _seconds_to_region_name(ttl)
-    norm_tag = _normalize_tag(tag)
+    norm_tag = _escape_glob(_normalize_tag(tag))
 
     if tag:
         base = f'{fn_name}|{norm_tag}'
@@ -245,9 +372,9 @@ def make_partial_pattern(
         base = fn_name
 
     if global_clear:
-        prefix = f'*{base}|'
+        prefix = f'{region}:*{base}|'
     else:
-        prefix = f'{region}:{key_prefix}{base}|'
+        prefix = f'{region}:{_escape_glob(key_prefix)}{base}|'
 
     if kwargs:
         fragments = [f'{k}={_render_value(v)}' for k, v in sorted(kwargs.items())]
