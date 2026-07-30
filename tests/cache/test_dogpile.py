@@ -9,6 +9,7 @@ import time
 
 import cachu
 import pytest
+from cachu.backends.memory import MemoryBackend
 
 
 class TestSyncDogpilePrevention:
@@ -501,3 +502,82 @@ class TestAsyncConcurrentInvalidation:
         info = await cachu.async_cache_info(compute)
         assert info.misses == 1
         assert info.hits == 5
+
+
+class TestLockIsReleasedOnEveryExit:
+    """The dogpile mutex is released on the failure path as well.
+
+    Notes
+    -----
+    - Both tests keep a strong reference to the mutex handed out during the
+      call. The per-key registries hold their locks weakly, so once the
+      wrapper returns and drops the last reference the lock is collected and
+      the next caller silently gets a brand-new one - which would hide a
+      leaked lock completely. A real waiter contending on the key holds
+      exactly this reference, so keeping it is the honest setup.
+    """
+
+    def test_lock_is_released_when_the_function_raises(self, monkeypatch):
+        """A raising function unlocks the key instead of wedging it.
+
+        Mutation: release only on the success path, e.g. by narrowing the
+        `finally` to the returning branch. Every failed call would then leak
+        the key's lock, so each later caller pays lock_timeout in full.
+        Oracle: the lock's own state as the next caller sees it - the very
+        mutex factory the wrapper uses hands out a mutex that acquires the
+        key immediately after the exception escapes.
+        """
+        handed_out = []
+        original_get_mutex = MemoryBackend.get_mutex
+
+        def keep(self, key):
+            mutex = original_get_mutex(self, key)
+            handed_out.append((self, key, mutex))
+            return mutex
+
+        monkeypatch.setattr(MemoryBackend, 'get_mutex', keep)
+
+        @cachu.cache(ttl=60, backend='memory')
+        def fetch(x: int) -> int:
+            raise RuntimeError('upstream down')
+
+        with pytest.raises(RuntimeError, match='upstream down'):
+            fetch(1)
+
+        backend, key, _held = handed_out[0]
+        next_caller = original_get_mutex(backend, key)
+        assert next_caller.acquire(timeout=0.5) is True
+        next_caller.release()
+
+    async def test_async_lock_is_released_when_the_coroutine_raises(self, monkeypatch):
+        """A raising coroutine unlocks the key too.
+
+        Mutation: release only on the success path of the ASYNC wrapper. Its
+        sync twin is pinned above and the two wrappers are near-identical, so
+        fixing one and forgetting the other is the likely defect; a leaked
+        AsyncioMutex wedges the key for the life of the event loop.
+        Oracle: the lock's own state as the next caller sees it - the very
+        mutex factory the wrapper uses hands out a mutex that acquires the
+        key immediately after the exception escapes.
+        """
+        handed_out = []
+        original_get_mutex = MemoryBackend.get_async_mutex
+
+        def keep(self, key):
+            mutex = original_get_mutex(self, key)
+            handed_out.append((self, key, mutex))
+            return mutex
+
+        monkeypatch.setattr(MemoryBackend, 'get_async_mutex', keep)
+
+        @cachu.cache(ttl=60, backend='memory')
+        async def fetch(x: int) -> int:
+            raise RuntimeError('upstream down')
+
+        with pytest.raises(RuntimeError, match='upstream down'):
+            await fetch(1)
+
+        backend, key, _held = handed_out[0]
+        next_caller = original_get_mutex(backend, key)
+        assert await next_caller.acquire(timeout=0.5) is True
+        await next_caller.release()

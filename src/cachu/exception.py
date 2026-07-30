@@ -33,4 +33,13 @@ class CacheLockTimeout(CacheError):
 
     Only raised when the resolved config sets ``on_lock_timeout='raise'``. The
     default (``'run'``) executes the decorated function instead.
+
+    Notes
+    -----
+    - It always means a wait that actually happened and actually expired.
+      Neither a lock *error* nor an exhausted ``cache_deadline`` raises it:
+      the first degrades to running without the lock, and the second skips
+      the acquire, so no wait ever took place.
+    - Catching ``CacheError`` broadly and re-running the function turns the
+      shedding back into the stampede it exists to prevent.
     """

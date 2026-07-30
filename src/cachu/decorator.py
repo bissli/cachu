@@ -40,32 +40,6 @@ def _budget_spent(started: float | None, deadline: float | None) -> bool:
     return (time.monotonic() - started) >= deadline
 
 
-def _remaining_lock_wait(
-    lock_timeout: float,
-    started: float | None,
-    deadline: float | None,
-) -> float:
-    """Clamp the dogpile lock wait to whatever is left of the cache budget.
-
-    Returns
-    -------
-    float
-        `lock_timeout` when unbounded, otherwise the smaller of `lock_timeout`
-        and the remaining budget, floored at 0.
-
-    Notes
-    -----
-    - A return below `lock_timeout` means the deadline, not contention, is
-      what ends the wait. The caller still treats a failed acquire as a
-      reason to shed under `on_lock_timeout='raise'`: both causes lead to
-      the same outcome - running the function without the lock - which is
-      exactly what that setting exists to prevent.
-    """
-    if started is None or deadline is None:
-        return lock_timeout
-    return max(0.0, min(lock_timeout, deadline - (time.monotonic() - started)))
-
-
 async def _safe_aget(
     backend_inst: Any,
     cache_key: str,
@@ -237,21 +211,27 @@ def cache(
     - Two reserved kwargs are consumed by the wrapper and never reach the
       function: `_skip_cache=True` bypasses the cache for that call, and
       `_overwrite_cache=True` executes and overwrites the stored value.
-    - With `fail_open=True` (default) no cache fault reaches the caller:
-      backend construction, mutex creation, reads and lock acquisition all
-      degrade to running the function uncached.
+    - With `fail_open=True` (default) no cache fault reaches the caller.
+      Backend construction and key generation degrade to running the
+      function uncached; a read fault, a mutex-creation fault or a failed
+      acquire degrade to a miss, so the function runs and its result is
+      still written and counted.
     - `fail_open=False` propagates those faults instead.
     - Writes, stat updates and lock release are always best-effort and are
       logged rather than raised, whichever way `fail_open` is set: they run
       after the result already exists, so failing the call would discard a
       correct answer for a cache-only problem.
     - `fail_open` bounds exceptions, not hangs. A wedged Redis endpoint
-      blocks inside socket timeouts and never raises; bound that with the
-      `cache_deadline` setting.
+      blocks inside socket timeouts and never raises, and `cache_deadline`
+      cannot shorten it either - the budget is checked only between
+      operations. Bound one blocked call with `redis_socket_timeout` and
+      `redis_retry_count`; use `cache_deadline` for the cumulative work
+      between them.
     - A lock timeout runs the function by default, so N waiters become N
       backend reads. Set `on_lock_timeout='raise'` to shed load instead.
       That raise is intentional and fires even under `fail_open=True`,
-      because shedding load is a decision rather than a fault.
+      because shedding load is a decision rather than a fault - but only a
+      wait that genuinely expired sheds, never a spent budget.
 
     Examples
     --------
@@ -382,11 +362,12 @@ def cache(
 
                 acquired = False
                 lock_faulted = False
+                lock_attempted = False
                 if mutex is not None and not _budget_spent(started, deadline):
-                    lock_wait = _remaining_lock_wait(
-                        cfg.lock_timeout, started, deadline)
+                    lock_attempted = True
+                    lock_started = time.monotonic()
                     try:
-                        acquired = await mutex.acquire(timeout=lock_wait)
+                        acquired = await mutex.acquire(timeout=cfg.lock_timeout)
                     except Exception:
                         if not fail_open:
                             raise
@@ -394,6 +375,9 @@ def cache(
                         logger.warning(
                             f'Cache lock acquire failed for {fn.__name__!r}; '
                             f'proceeding without lock', exc_info=True)
+                    finally:
+                        if started is not None:
+                            started += time.monotonic() - lock_started
                 try:
                     if not overwrite_cache and not _budget_spent(started, deadline):
                         value, created_at = await _safe_aget(
@@ -404,12 +388,13 @@ def cache(
                                 await _safe_aincr_stat(backend_inst, fn.__name__, 'hits')
                             return value
 
-                    if (mutex is not None and not acquired and not lock_faulted
+                    if (lock_attempted and not acquired and not lock_faulted
                             and cfg.on_lock_timeout == 'raise'):
                         raise CacheLockTimeout(
-                            f'Did not acquire the cache lock for '
-                            f'{fn.__name__!r} and on_lock_timeout is "raise"; '
-                            f'shedding rather than running the function')
+                            f'Waited {cfg.lock_timeout}s for the cache lock for '
+                            f'{fn.__name__!r} without acquiring it and '
+                            f'on_lock_timeout is "raise"; shedding rather than '
+                            f'running the function')
 
                     if not _budget_spent(started, deadline):
                         await _safe_aincr_stat(backend_inst, fn.__name__, 'misses')
@@ -425,7 +410,10 @@ def cache(
                     if _budget_spent(started, deadline):
                         logger.warning(
                             f'Cache write skipped for {fn.__name__!r}: '
-                            f'cache_deadline of {deadline}s exhausted')
+                            f'cache_deadline of {deadline}s exhausted. A cache '
+                            f'whose read alone outlasts the budget can never '
+                            f'populate; raise cache_deadline above the '
+                            f'backend round trip or the cache stays cold')
                         return result
 
                     resolved_ttl = _resolve_ttl(
@@ -513,11 +501,12 @@ def cache(
 
                 acquired = False
                 lock_faulted = False
+                lock_attempted = False
                 if mutex is not None and not _budget_spent(started, deadline):
-                    lock_wait = _remaining_lock_wait(
-                        cfg.lock_timeout, started, deadline)
+                    lock_attempted = True
+                    lock_started = time.monotonic()
                     try:
-                        acquired = mutex.acquire(timeout=lock_wait)
+                        acquired = mutex.acquire(timeout=cfg.lock_timeout)
                     except Exception:
                         if not fail_open:
                             raise
@@ -525,6 +514,9 @@ def cache(
                         logger.warning(
                             f'Cache lock acquire failed for {fn.__name__!r}; '
                             f'proceeding without lock', exc_info=True)
+                    finally:
+                        if started is not None:
+                            started += time.monotonic() - lock_started
                 try:
                     if not overwrite_cache and not _budget_spent(started, deadline):
                         value, created_at = _safe_get(
@@ -535,12 +527,13 @@ def cache(
                                 _safe_incr_stat(backend_inst, fn.__name__, 'hits')
                             return value
 
-                    if (mutex is not None and not acquired and not lock_faulted
+                    if (lock_attempted and not acquired and not lock_faulted
                             and cfg.on_lock_timeout == 'raise'):
                         raise CacheLockTimeout(
-                            f'Did not acquire the cache lock for '
-                            f'{fn.__name__!r} and on_lock_timeout is "raise"; '
-                            f'shedding rather than running the function')
+                            f'Waited {cfg.lock_timeout}s for the cache lock for '
+                            f'{fn.__name__!r} without acquiring it and '
+                            f'on_lock_timeout is "raise"; shedding rather than '
+                            f'running the function')
 
                     if not _budget_spent(started, deadline):
                         _safe_incr_stat(backend_inst, fn.__name__, 'misses')
@@ -556,7 +549,10 @@ def cache(
                     if _budget_spent(started, deadline):
                         logger.warning(
                             f'Cache write skipped for {fn.__name__!r}: '
-                            f'cache_deadline of {deadline}s exhausted')
+                            f'cache_deadline of {deadline}s exhausted. A cache '
+                            f'whose read alone outlasts the budget can never '
+                            f'populate; raise cache_deadline above the '
+                            f'backend round trip or the cache stays cold')
                         return result
 
                     resolved_ttl = _resolve_ttl(

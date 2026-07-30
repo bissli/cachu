@@ -197,13 +197,18 @@ class TestBudgetStopsCacheWork:
         assert clock.now == pytest.approx(1001.0)
         assert backend.ops == ['get', 'get']
 
-    def test_lock_wait_is_clamped_to_the_remaining_budget(self, clock, monkeypatch):
-        """The dogpile wait cannot outlive the budget.
+    def test_lock_wait_is_bounded_by_lock_timeout_not_the_budget(
+            self, clock, monkeypatch):
+        """The dogpile wait answers to lock_timeout, never to the budget.
 
-        Mutation: pass cfg.lock_timeout straight through instead of clamping,
-        restoring the unbounded wait the report measured.
-        Oracle: hand-computed remainder - 1.0s budget minus a 0.4s read leaves
-        0.6s, which is below the 10.0s lock_timeout.
+        Mutation: clamp the wait to the remaining budget, as 0.4.1 did. That
+        made a waiter give up before the caller computing the value could
+        finish, so every waiter ran the function itself - `cache_deadline`
+        alone turned dogpile suppression into a stampede on a healthy
+        backend, and raised p100 rather than bounding it.
+        Oracle: the timeout handed to acquire is the configured 10.0s
+        lock_timeout, not the 0.6s the clamp would compute from a 1.0s
+        budget already charged 0.4s by the read.
         """
         backend = _SlowBackend(clock, cost=0.4)
         _install(monkeypatch, backend)
@@ -224,7 +229,160 @@ class TestBudgetStopsCacheWork:
 
         fetch('k')
 
-        assert seen == [pytest.approx(0.6)]
+        assert seen == [pytest.approx(10.0)]
+
+    def test_time_waiting_for_the_lock_is_not_charged_to_the_budget(
+            self, clock, monkeypatch):
+        """Waiting on a peer's function is that function's time, not cache work.
+
+        Mutation: drop the `started +=` refund around the acquire, so the
+        wait is charged to the budget. A waiter would then arrive at the
+        write step with the budget already spent by another caller's
+        computation and skip it, and the entry would never be stored.
+        Oracle: hand-computed arithmetic - 5.8s elapses against a 1.0s
+        budget, yet the call still reaches 'set', because only the four
+        0.2s operations are chargeable and the 5.0s wait is not. Charging
+        the wait leaves the sequence at ['get'] alone.
+        """
+        backend = _SlowBackend(clock, cost=0.2)
+        _install(monkeypatch, backend)
+        cachu.configure(cache_deadline=1.0, lock_timeout=10.0)
+
+        original = ThreadingMutex.acquire
+
+        def slow_acquire(self, timeout=None):
+            clock.advance(5.0)
+            return original(self, timeout)
+
+        monkeypatch.setattr(ThreadingMutex, 'acquire', slow_acquire)
+
+        @cachu.cache(ttl=300, backend='memory', tag='slow')
+        def fetch(key: str) -> str:
+            return 'value'
+
+        assert fetch('k') == 'value'
+
+        assert clock.now == pytest.approx(1005.8)
+        assert backend.ops == ['get', 'get', 'stat:misses', 'set']
+
+
+class TestLockReleaseIsNotGatedOnTheBudget:
+    """Releasing the dogpile mutex is the one step the budget must not skip.
+
+    Notes
+    -----
+    - ThreadingMutex and AsyncioMutex have no TTL, so a release skipped to
+      buy back budget wedges that key permanently rather than delaying it.
+      The release therefore costs up to one extra backend operation beyond
+      cache_deadline, and that is deliberate.
+    - Each test keeps a strong reference to every mutex handed out during
+      the call. The per-key registries hold their locks weakly, so once the
+      wrapper returns and drops the last reference the lock is collected and
+      the next caller silently gets a brand-new one - which would hide a
+      skipped release completely. A real waiter contending on the key holds
+      exactly this reference, so keeping it is the honest setup.
+    """
+
+    def test_lock_release_runs_after_the_budget_is_exhausted(
+            self, clock, monkeypatch):
+        """A call whose budget ran out mid-flight still unlocks the key.
+
+        Mutation: gate the sync `finally` release on the budget
+        (`if acquired and not _budget_spent(started, deadline)`), a plausible
+        tightening of the deadline that never unlocks the key again.
+        Oracle: hand-computed arithmetic plus the lock's own state as the
+        next caller sees it - two 0.6s reads put the clock at 1.2s against a
+        1.0s budget, the release is observed exactly once at that point, and
+        a fresh mutex from the same factory then acquires the key.
+        """
+        backend = _SlowBackend(clock, cost=0.6)
+        _install(monkeypatch, backend)
+        cachu.configure(cache_deadline=1.0, lock_timeout=10.0)
+
+        keys = []
+        live_mutexes = []
+        original_get_mutex = MemoryBackend.get_mutex
+
+        def keep(self, key):
+            keys.append(key)
+            mutex = original_get_mutex(self, key)
+            live_mutexes.append(mutex)
+            return mutex
+
+        monkeypatch.setattr(MemoryBackend, 'get_mutex', keep)
+
+        released_at = []
+        original_release = ThreadingMutex.release
+
+        def record(self):
+            released_at.append(clock.now)
+            original_release(self)
+
+        monkeypatch.setattr(ThreadingMutex, 'release', record)
+
+        @cachu.cache(ttl=300, backend='memory', tag='slow')
+        def fetch(key: str) -> str:
+            return 'value'
+
+        assert fetch('k') == 'value'
+
+        assert backend.ops == ['get', 'get']
+        assert released_at == [pytest.approx(1001.2)]
+
+        next_caller = backend.get_mutex(keys[0])
+        assert next_caller.acquire(timeout=0.5) is True
+        next_caller.release()
+
+    async def test_async_lock_release_runs_after_the_budget_is_exhausted(
+            self, clock, monkeypatch):
+        """The async wrapper releases on an exhausted budget too.
+
+        Mutation: gate the ASYNC `finally` release on the budget. Its sync
+        twin is pinned above and the two wrappers are near-identical, so a
+        guard added to one and forgotten in the other is the likely defect;
+        an AsyncioMutex left held wedges the key for the whole event loop.
+        Oracle: hand-computed arithmetic plus the lock's own state as the
+        next caller sees it - two 0.6s reads put the clock at 1.2s against a
+        1.0s budget, the release is observed exactly once at that point, and
+        a fresh mutex from the same factory then acquires the key.
+        """
+        backend = _SlowBackend(clock, cost=0.6)
+        _install(monkeypatch, backend)
+        cachu.configure(cache_deadline=1.0, lock_timeout=10.0)
+
+        keys = []
+        live_mutexes = []
+        original_get_mutex = MemoryBackend.get_async_mutex
+
+        def keep(self, key):
+            keys.append(key)
+            mutex = original_get_mutex(self, key)
+            live_mutexes.append(mutex)
+            return mutex
+
+        monkeypatch.setattr(MemoryBackend, 'get_async_mutex', keep)
+
+        released_at = []
+        original_release = AsyncioMutex.release
+
+        async def record(self):
+            released_at.append(clock.now)
+            await original_release(self)
+
+        monkeypatch.setattr(AsyncioMutex, 'release', record)
+
+        @cachu.cache(ttl=300, backend='memory', tag='slow')
+        async def fetch(key: str) -> str:
+            return 'value'
+
+        assert await fetch('k') == 'value'
+
+        assert backend.ops == ['aget', 'aget']
+        assert released_at == [pytest.approx(1001.2)]
+
+        next_caller = backend.get_async_mutex(keys[0])
+        assert await next_caller.acquire(timeout=0.5) is True
+        await next_caller.release()
 
 
 class TestFunctionTimeIsNotCharged:

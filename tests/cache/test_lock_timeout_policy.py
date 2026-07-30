@@ -141,18 +141,19 @@ class TestRaiseShedsLoad:
 
 
 class TestSheddingSurvivesADeadline:
-    """`on_lock_timeout='raise'` keeps shedding when cache_deadline is set.
+    """`on_lock_timeout='raise'` sheds on contention, and only on contention.
 
     Notes
     -----
-    - `_remaining_lock_wait` clamps the wait to what is left of the budget,
-      so with `cache_deadline <= lock_timeout` the wait is always shorter
-      than `lock_timeout`.
-    - Discriminating a "real" timeout by comparing the two made the raise
-      dead code in exactly that configuration, while the clamp still cut the
-      wait short - so every waiter gave up early and ran the function. The
-      two documented remedies for slow backends and for stampedes silently
-      cancelled each other out.
+    - The two settings are orthogonal: `lock_timeout` bounds waiting for
+      another caller's function, `cache_deadline` bounds cachu's own I/O.
+      Shedding therefore has to survive any deadline, and must not be
+      triggered by one.
+    - Both halves have been wrong in the past. Discriminating a "real"
+      timeout by comparing the wait against `lock_timeout` made the raise
+      dead code whenever a deadline was set; treating a spent budget as a
+      timeout then sheds callers no lock ever contended, which is a total
+      outage rather than load shedding.
     """
 
     @pytest.mark.parametrize('deadline', [0.5, 1.0, 5.0])
@@ -174,32 +175,43 @@ class TestSheddingSurvivesADeadline:
         with pytest.raises(CacheLockTimeout):
             fetch(5)
 
-    def test_an_exhausted_budget_sheds_rather_than_stampedes(self, monkeypatch):
-        """A budget spent before the lock is even attempted still sheds.
+    def test_an_exhausted_budget_runs_rather_than_shedding(self, monkeypatch):
+        """A lock never attempted is not a lock timeout.
 
-        Mutation: treat "never attempted the lock" as "not a timeout", so a
-        deadline-exhausted caller runs the function - a stampede under the
-        one setting whose purpose is to prevent one.
-        Oracle: CacheLockTimeout, with the function never invoked.
+        Mutation: treat "budget spent before the acquire" as a timeout, as
+        0.4.1 did. Shedding then needs no contention at all: a cache merely
+        slower than the budget sheds every caller, so the function never
+        runs, so nothing is ever stored, so nothing recovers - a permanent
+        outage of the decorated call under fail_open=True.
+        Oracle: the function's own return value, and a call count proving it
+        ran - with a 0.05s read against a 0.01s budget, which is exactly the
+        state that used to raise.
         """
         cachu.configure(on_lock_timeout='raise', cache_deadline=0.01)
         calls = []
+        attempts = []
 
         def slow_read(self, key):
             time.sleep(0.05)
             return cachu.api.NO_VALUE, None
 
+        original_acquire = ThreadingMutex.acquire
+
+        def record(self, timeout=None):
+            attempts.append(timeout)
+            return original_acquire(self, timeout)
+
         monkeypatch.setattr(MemoryBackend, 'get_with_metadata', slow_read)
+        monkeypatch.setattr(ThreadingMutex, 'acquire', record)
 
         @cachu.cache(ttl=300, backend='memory', tag='herd')
         def fetch(key: int) -> int:
             calls.append(key)
             return key * 2
 
-        with pytest.raises(CacheLockTimeout):
-            fetch(5)
-
-        assert calls == []
+        assert fetch(5) == 10
+        assert calls == [5]
+        assert attempts == []
 
 
 class TestFailOpenIsNotOverridden:
