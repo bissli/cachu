@@ -989,7 +989,7 @@ from cachu import (
 )
 ```
 
-## Upgrading to 0.4.0
+## Upgrading from 0.3.x
 
 Everything new is additive and defaults to previous behaviour. Three changes are visible
 to existing code that is not modified.
