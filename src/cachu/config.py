@@ -269,8 +269,11 @@ class CacheConfig:
     fail_open : bool, default True
         Degrade backend faults to a cache miss instead of raising.
     cache_deadline : float or None, default None
-        Total seconds of cache-attributable work allowed per decorated call.
-        None keeps the historical unbounded behaviour.
+        Total seconds of cache-attributable work allowed per decorated call,
+        measured between backend operations: an operation already in flight
+        is never interrupted, and time spent waiting for another caller's
+        function is refunded rather than charged. None keeps the historical
+        unbounded behaviour.
     on_lock_timeout : {'run', 'raise'}, default 'run'
         What a caller does when it fails to take the dogpile mutex.
     memory_maxsize : int or None, default None
@@ -283,14 +286,17 @@ class CacheConfig:
     Notes
     -----
     - Worst-case Redis latency for one cached call multiplies out rather than
-      adding up: `redis_socket_timeout` applies to connect AND read, is
-      retried `redis_retry_count` times, and roughly five Redis operations run
-      per call (get, mutex acquire, stat incr, set, mutex release). The mutex
-      acquire itself busy-loops until `lock_timeout`, paying a full socket
-      budget per iteration. Against a blackholed endpoint that compounds into
-      minutes, and it is a hang rather than an exception, so `fail_open` and
-      `try`/`except` cannot shorten it - only `cache_deadline` and smaller
-      timeout budgets can.
+      adding up: `redis_socket_timeout` applies to connect AND read, and is
+      retried `redis_retry_count` times INSIDE one logical operation. A miss
+      performs six round trips (get, mutex acquire, post-lock re-read, stat
+      incr, set, mutex release); against a blackholed endpoint the acquire
+      raises rather than polling, so five of them each pay a full budget.
+    - That is a hang rather than an exception, so neither `fail_open` nor
+      `try`/`except` shortens it - and neither does `cache_deadline`, which
+      is checked only between operations. Only `redis_socket_timeout` and
+      `redis_retry_count` bound a single in-flight call; `cache_deadline`
+      bounds the cumulative work between them. They are complementary, not
+      alternatives.
     """
     backend_default: str = 'memory'
     key_prefix: str = ''
@@ -490,10 +496,13 @@ def configure(
         degrade to a cache miss; when False they propagate to the caller.
     cache_deadline : float or None, default None
         Total seconds of cache-attributable work allowed per decorated call.
-        Time spent inside the decorated function itself does not count. Once
-        the budget is spent the remaining cache steps are skipped, so a
-        wedged backend costs at most this much plus the one backend call
-        already in flight. None (default) keeps the unbounded behaviour.
+        Neither the decorated function's own runtime nor time spent waiting
+        on another caller's copy of it counts; that wait answers to
+        `lock_timeout`. Once the budget is spent the remaining cache steps
+        are skipped, so a wedged backend costs at most this much plus the
+        one call already in flight, plus the mutex release if the lock was
+        held - two uninterruptible operations, not one. None (default) keeps
+        the unbounded behaviour.
     on_lock_timeout : {'run', 'raise'} or None, default None
         Behaviour when the dogpile mutex cannot be taken within
         `lock_timeout`. 'run' (default) executes the function anyway; 'raise'

@@ -30,6 +30,8 @@ def _warn_if_deadline_unenforceable(cfg: CacheConfig) -> None:
     - `cache_deadline` is only checked between steps, so a call already
       blocked in a socket read runs to completion. With the shipped defaults
       that floor is 5.0 * 4 = 20 s, which swamps a 1 s deadline entirely.
+    - The mutex release in the `finally` is not gated on the budget either,
+      so a call that held the lock can overrun by twice that floor.
     - Deriving the socket timeout from the deadline instead of warning was
       measured to be worse: it silently overrode an explicitly configured
       value and, on a healthy but slow endpoint, timed out every read and
