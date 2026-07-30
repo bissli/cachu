@@ -113,7 +113,7 @@ class TestSyncWrite:
         backend.set('k', {'v': 1}, 300)
 
         assert backend.get('k') == {'v': 1}
-        assert _unpack_value(client.store['k'])[0] == {'v': 1}
+        assert _unpack_value(client.store['k'], 'k')[0] == {'v': 1}
 
     def test_non_positive_ttl_deletes_instead_of_writing(self, sync_backend):
         """A ttl of 0 still deletes rather than writing an eternal key.

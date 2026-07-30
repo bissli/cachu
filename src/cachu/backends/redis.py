@@ -1,6 +1,7 @@
 """Redis cache backend implementation.
 """
 import asyncio
+import logging
 import pickle
 import struct
 import threading
@@ -15,6 +16,8 @@ if TYPE_CHECKING:
     import redis
     import redis.asyncio as aioredis
 
+
+logger = logging.getLogger(__name__)
 
 _METADATA_FORMAT = 'd'
 _METADATA_SIZE = struct.calcsize(_METADATA_FORMAT)
@@ -98,17 +101,39 @@ def _pack_value(value: Any, created_at: float) -> bytes:
     return metadata + pickled
 
 
-def _unpack_value(data: bytes) -> tuple[Any, float] | None:
+def _unpack_value(data: bytes, key: str) -> tuple[Any, float] | None:
     """Unpack value and creation timestamp.
 
-    Returns None if data is corrupted (per dogpile.cache behavior: treat
-    deserialization errors as cache misses for graceful degradation).
+    Parameters
+    ----------
+    data : bytes
+        Packed metadata header followed by the pickled value.
+    key : str
+        Cache key, used only to identify the row in the eviction warning.
+
+    Returns
+    -------
+    tuple of (Any, float) or None
+        The value and its creation timestamp, or None when the payload
+        cannot be decoded.
+
+    Notes
+    -----
+    - An undecodable payload is treated as a miss rather than an error, per
+      dogpile.cache, so the caller degrades gracefully.
+    - It is logged because the usual cause is a deploy that changed a
+      pickled class while an older release still writes the same key, which
+      drives the hit rate to zero for as long as both run. Silent here would
+      leave the operator nothing to read; the file backend already warns on
+      the identical fault.
     """
     try:
         created_at = struct.unpack(_METADATA_FORMAT, data[:_METADATA_SIZE])[0]
         value = pickle.loads(data[_METADATA_SIZE:])
         return value, created_at
     except (pickle.UnpicklingError, EOFError, TypeError, AttributeError, ModuleNotFoundError, struct.error):
+        logger.warning(
+            f'Evicting undecodable cache row for key {key!r}', exc_info=True)
         return None
 
 
@@ -167,7 +192,7 @@ class RedisBackend(Backend):
         data = self.client.get(key)
         if data is None:
             return NO_VALUE
-        result = _unpack_value(data)
+        result = _unpack_value(data, key)
         if result is None:
             self.client.delete(key)
             return NO_VALUE
@@ -179,7 +204,7 @@ class RedisBackend(Backend):
         data = self.client.get(key)
         if data is None:
             return NO_VALUE, None
-        result = _unpack_value(data)
+        result = _unpack_value(data, key)
         if result is None:
             self.client.delete(key)
             return NO_VALUE, None
@@ -277,7 +302,7 @@ class RedisBackend(Backend):
         data = await client.get(key)
         if data is None:
             return NO_VALUE
-        result = _unpack_value(data)
+        result = _unpack_value(data, key)
         if result is None:
             await client.delete(key)
             return NO_VALUE
@@ -290,7 +315,7 @@ class RedisBackend(Backend):
         data = await client.get(key)
         if data is None:
             return NO_VALUE, None
-        result = _unpack_value(data)
+        result = _unpack_value(data, key)
         if result is None:
             await client.delete(key)
             return NO_VALUE, None

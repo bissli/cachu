@@ -3,6 +3,7 @@
 These use lightweight fake clients so no real Redis is required.
 """
 import fnmatch
+import logging
 
 import asyncio
 
@@ -253,3 +254,28 @@ async def test_currsize_refresh_task_is_strongly_referenced():
 
     assert len(decorator._background_tasks) >= 1
     await asyncio.gather(*list(decorator._background_tasks))
+
+
+class TestUndecodableRowIsVisible:
+    """An undecodable stored value is a miss, but never a silent one.
+    """
+
+    def test_undecodable_payload_is_logged_and_reported_as_a_miss(self, caplog):
+        """A payload that no longer unpickles warns before it is evicted.
+
+        Mutation: drop the logger.warning and return None quietly, which is
+        what the Redis backend did before. A deploy that changes a pickled
+        class while an older release still writes the same key then drives
+        the hit rate to zero with nothing in the logs at any level, and the
+        stats are indistinguishable from a healthy cold cache.
+        Oracle: the message the file backend already emits for the identical
+        fault, plus the None return that makes the caller treat it as a miss.
+        """
+        from cachu.backends.redis import _unpack_value
+
+        payload = b'\x00' * 8 + b'definitely not a pickle'
+
+        with caplog.at_level(logging.WARNING, logger='cachu.backends.redis'):
+            assert _unpack_value(payload, 'authz:token') is None
+
+        assert "Evicting undecodable cache row for key 'authz:token'" in caplog.text
