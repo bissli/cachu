@@ -77,9 +77,9 @@ class TestSyncConstructionFailOpen:
         assert len(calls) == 2
 
     def test_fail_closed_still_propagates_construction_error(self, monkeypatch):
-        """fail_open=False keeps strict behaviour for construction faults too.
+        """fail_open=False keeps strict behavior for construction faults too.
 
-        Mutation: swallow the error unconditionally instead of honouring
+        Mutation: swallow the error unconditionally instead of honoring
         fail_open.
         Oracle: the sentinel error type raised by the stubbed factory.
         """
@@ -153,9 +153,9 @@ class TestAsyncConstructionFailOpen:
         assert await fetch('x') == 42
 
     async def test_fail_closed_still_propagates_construction_error(self, monkeypatch):
-        """fail_open=False keeps strict behaviour on the async path.
+        """fail_open=False keeps strict behavior on the async path.
 
-        Mutation: swallow the error unconditionally instead of honouring
+        Mutation: swallow the error unconditionally instead of honoring
         fail_open.
         Oracle: the sentinel error type raised by the stubbed factory.
         """

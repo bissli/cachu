@@ -2,7 +2,7 @@
 
 Notes
 -----
-- redis-py 8.x warns that setex is deprecated in favour of set with an
+- redis-py 8.x warns that setex is deprecated in favor of set with an
   expiry argument, so every cache write emitted a DeprecationWarning.
 - The wire semantics are identical, but the argument order is not (SETEX
   takes key, seconds, value; SET takes key, value, ex=seconds), so a silent
@@ -45,7 +45,7 @@ class _WriteRecordingRedis:
 
 
 class _AsyncWriteRecordingRedis(_WriteRecordingRedis):
-    """Async Redis stand-in with the same recording behaviour.
+    """Async Redis stand-in with the same recording behavior.
     """
 
     async def set(self, name, value, ex=None, **kwargs):
@@ -182,7 +182,7 @@ class TestAgainstRealRedis:
         """A real Redis reports a TTL close to the one requested.
 
         Mutation: pass the TTL positionally into the value slot, which a
-        fake client would happily accept but a server would not honour.
+        fake client would happily accept but a server would not honor.
         Oracle: the server's own TTL command, bounded by the requested 300s.
         """
         backend = cachu.get_backend('redis', ttl=300)
@@ -197,7 +197,7 @@ class TestAgainstRealRedis:
         """A cache write against a real redis-py client warns about nothing.
 
         Mutation: restore client.setex(key, ttl, packed), which redis-py 8.x
-        deprecates in favour of set(ex=...).
+        deprecates in favor of set(ex=...).
         Oracle: an empty DeprecationWarning list from the real client. A fake
         client cannot serve as the oracle here: it emits no warnings under
         any mutation, so the assertion would be unfalsifiable.

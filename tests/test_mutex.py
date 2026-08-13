@@ -396,7 +396,7 @@ class TestZeroTimeoutSemantics:
 
     @pytest.mark.redis
     async def test_async_zero_timeout_returns_immediately(self, async_redis_client):
-        """The async Redis mutex honours a zero timeout too.
+        """The async Redis mutex honors a zero timeout too.
 
         Mutation: fix only the sync mutex.
         Oracle: elapsed wall time, well below the 10s lock_timeout.
@@ -414,7 +414,7 @@ class TestZeroTimeoutSemantics:
 
 
 class TestLocalMutexZeroTimeout:
-    """The local mutexes honour a zero timeout like threading.Lock does.
+    """The local mutexes honor a zero timeout like threading.Lock does.
 
     Notes
     -----

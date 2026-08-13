@@ -22,7 +22,7 @@ class MemoryBackend(Backend):
     maxsize : int or None, default None
         Maximum number of live entries. Once exceeded, least-recently-used
         entries are evicted until the bound holds again. None is unbounded,
-        which is the historical behaviour.
+        which is the historical behavior.
     sweep_interval : float, default 60.0
         Minimum seconds between amortized sweeps that drop expired entries.
         0 sweeps on every mutating or reading operation.

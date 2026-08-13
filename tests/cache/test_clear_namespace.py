@@ -50,7 +50,7 @@ class TestClearPatternShape:
         """An empty key_prefix still yields a scoped glob.
 
         Mutation: scope by prefix only when one is configured (the 0.4.0
-        behaviour), which returns None here and lets Redis widen it to '*'.
+        behavior), which returns None here and lets Redis widen it to '*'.
         Oracle: hand-written globs for the 300s region.
         """
         assert make_clear_pattern(None, '', 300) == '5m:*|*'
@@ -147,7 +147,7 @@ class TestClearPatternShape:
     def test_escaping_is_identical_under_fnmatch_and_sqlite_glob(self):
         """The escape form has to hold for every backend's matcher.
 
-        Mutation: escape with a backslash, which Redis honours but fnmatch
+        Mutation: escape with a backslash, which Redis honors but fnmatch
         and SQLite GLOB treat as a literal character - so the memory and
         file backends would silently stop matching.
         Oracle: differential agreement between fnmatch and SQLite GLOB on
@@ -191,7 +191,7 @@ class TestClearPatternShape:
     def test_a_float_ttl_lands_in_the_same_region_as_its_int(self):
         """300.0 and 300 name one region, because they ARE one region.
 
-        Mutation: drop the int() normalisation from
+        Mutation: drop the int() normalization from
         `_seconds_to_region_name`. `manager` keys regions by a tuple and
         300 == 300.0 hashes equal, so the two decorators share one region
         while writing keys under '5m' and '5.0m' - and every clear builds
@@ -522,28 +522,28 @@ class TestClearLeavesForeignRedisKeysAlone:
         mutex.release()
 
     def test_a_metacharacter_key_prefix_clears_on_redis_too(self, client):
-        """Redis's own glob must honour the same escape form as the others.
+        """Redis's own glob must honor the same escape form as the others.
 
         Mutation: escape with a backslash instead of a single-character
         class. Redis accepts it, so this passes while the memory and file
         backends silently stop matching; escape with nothing and Redis reads
         `[dev]` as a class, so nothing is cleared here either.
         Oracle: an independent client reading both keys back - the escaped
-        prefix's entry gone, a neighbouring prefix's entry untouched.
+        prefix's entry gone, a neighboring prefix's entry untouched.
         """
         package = _get_caller_package()
         backend = manager.get_backend(package, 'redis', 300)
 
         mine = mangle_key('fetch||x=1', 'app[dev]:', 300)
-        neighbour = mangle_key('fetch||x=1', 'appd:', 300)
+        neighbor = mangle_key('fetch||x=1', 'appd:', 300)
         backend.set(mine, 'mine', 300)
-        backend.set(neighbour, 'neighbour', 300)
+        backend.set(neighbor, 'neighbor', 300)
 
         _registry._default.key_prefix = 'app[dev]:'
         assert cachu.cache_clear(backend='redis', ttl=300) == 1
 
         assert client.get(mine) is None
-        assert client.get(neighbour) is not None
+        assert client.get(neighbor) is not None
 
     def test_clear_does_not_scan_the_whole_keyspace(self, client, caplog):
         """A scoped clear reports only its own entries as cleared.

@@ -28,7 +28,7 @@ def _expire(backend: MemoryBackend, key: str) -> None:
 
 
 class TestUnboundedDefault:
-    """The default construction keeps the historical unbounded behaviour.
+    """The default construction keeps the historical unbounded behavior.
     """
 
     def test_no_maxsize_keeps_every_live_entry(self):
@@ -170,7 +170,7 @@ class TestLruBound:
         assert sorted(backend.keys()) == ['a', 'c']
 
     def test_bound_of_one_keeps_only_the_newest(self):
-        """maxsize=1 is honoured exactly, not off by one.
+        """maxsize=1 is honored exactly, not off by one.
 
         Mutation: `while len > maxsize` -> `while len > maxsize + 1`.
         Oracle: hand-derived survivor set {'b'}.
@@ -339,7 +339,7 @@ class TestConfigWiring:
             cachu.configure(memory_maxsize=bad)
 
     def test_sweeping_can_be_switched_off(self):
-        """float('inf') disables sweeping and restores the pre-0.4.0 behaviour.
+        """float('inf') disables sweeping and restores the pre-0.4.0 behavior.
 
         Mutation: reject non-finite values outright, leaving no documented
         way to opt out of the O(n) sweep this release turned on by default.

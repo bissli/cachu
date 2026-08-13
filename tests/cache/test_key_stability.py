@@ -11,7 +11,7 @@ def test_set_argument_cache_key_stable_across_process_restarts():
     """A set-valued argument must produce the same cache key across restarts.
 
     repr() of a set is not order-stable across processes (PYTHONHASHSEED
-    randomises set iteration order), so a naive repr-based key changes on every
+    randomizes set iteration order), so a naive repr-based key changes on every
     restart and silently never hits the prior entry.
     """
     code = (

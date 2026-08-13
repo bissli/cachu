@@ -35,14 +35,14 @@ def _boom(*args, **kwargs):
     raise RuntimeError('backend exploded')
 
 
-class TestCacheInfoHonoursFailOpen:
+class TestCacheInfoHonorsFailOpen:
     """A backend fault costs a degraded CacheInfo, not an exception.
     """
 
     def test_a_stats_fault_yields_a_zeroed_info(self, monkeypatch):
         """fail_open=True turns a stats fault into zeros.
 
-        Mutation: call get_cache_info unguarded (the 0.5.0 behaviour), so a
+        Mutation: call get_cache_info unguarded (the 0.5.0 behavior), so a
         Redis fault raises out of cache_info while the same fault costs only
         a miss on the read path.
         Oracle: the CacheInfo dataclass, compared whole.
@@ -125,14 +125,14 @@ class TestCacheInfoHonoursFailOpen:
             cachu.cache_info(plain)
 
 
-class TestAsyncCacheInfoHonoursFailOpen:
+class TestAsyncCacheInfoHonorsFailOpen:
     """The async twin degrades on every step, not only on currsize.
     """
 
     async def test_a_stats_fault_yields_a_zeroed_info(self, monkeypatch):
         """aget_stats faults degrade to zeros.
 
-        Mutation: guard currsize only (the 0.5.0 behaviour), leaving
+        Mutation: guard currsize only (the 0.5.0 behavior), leaving
         aget_stats able to raise out of async_cache_info.
         Oracle: the CacheInfo dataclass, compared whole.
         """

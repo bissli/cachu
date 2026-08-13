@@ -163,7 +163,7 @@ def _connect_budget_class(base: type) -> type:
     -----
     - Derived from whatever the pool resolved rather than chosen from the
       URL scheme, so TLS and unix-socket URLs keep their own connection
-      behaviour and only the timeout accounting changes.
+      behavior and only the timeout accounting changes.
     - Cached, so one class exists per base and `isinstance` checks and
       connection construction stay cheap.
     """
@@ -366,7 +366,7 @@ class RedisBackend(Backend):
         Notes
         -----
         - Uses SET ... EX rather than SETEX: redis-py 8.x deprecates setex in
-          favour of set(ex=...), and the wire semantics are identical.
+          favor of set(ex=...), and the wire semantics are identical.
         """
         if ttl <= 0:
             self.client.delete(key)
@@ -509,7 +509,7 @@ class RedisBackend(Backend):
         Notes
         -----
         - Uses SET ... EX rather than SETEX: redis-py 8.x deprecates setex in
-          favour of set(ex=...), and the wire semantics are identical.
+          favor of set(ex=...), and the wire semantics are identical.
         """
         client = self._get_async_client()
         if ttl <= 0:

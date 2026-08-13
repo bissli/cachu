@@ -188,7 +188,7 @@ class TestTagScope:
         Mutation: accept the empty tag. It is the decorator default, so the
         call reads as "switch off the untagged caches" but the truthiness
         guard in is_disabled makes it a permanent silent no-op.
-        Oracle: ValueError, and the untagged cache still hitting afterwards.
+        Oracle: ValueError, and the untagged cache still hitting afterward.
         """
         untagged, untagged_calls = _counting_cache()
 
@@ -294,7 +294,7 @@ class TestIntrospection:
 
 
 class TestAsyncScope:
-    """The async wrapper honours the same scopes.
+    """The async wrapper honors the same scopes.
     """
 
     async def test_async_package_scope(self):

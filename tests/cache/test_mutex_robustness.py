@@ -35,7 +35,7 @@ def test_asyncio_mutex_independent_lock_per_event_loop():
 
 
 def test_asyncio_mutex_excludes_within_one_loop():
-    """Within a single loop the per-key lock still serialises holders.
+    """Within a single loop the per-key lock still serializes holders.
     """
     async def scenario() -> None:
         first = AsyncioMutex('same')

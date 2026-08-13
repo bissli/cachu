@@ -307,7 +307,7 @@ class TestNothingToClearIsVisible:
         assert [r for r in caplog.records if 'no cache region' in r.message] == []
 
 
-class TestExistingBehaviourIsPreserved:
+class TestExistingBehaviorIsPreserved:
     """The warm-process paths behave exactly as before.
     """
 

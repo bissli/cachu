@@ -25,7 +25,7 @@ def _escape_glob(text: str) -> str:
     Returns
     -------
     str
-        The fragment with '*', '?' and '[' neutralised.
+        The fragment with '*', '?' and '[' neutralized.
 
     Notes
     -----
@@ -59,7 +59,7 @@ def _stable_repr(value: Any) -> str:
     """Render a value to a deterministic, restart-stable string.
 
     Sets and dicts are emitted in a canonical (sorted) order so the cache key
-    does not depend on PYTHONHASHSEED-randomised iteration order.
+    does not depend on PYTHONHASHSEED-randomized iteration order.
     """
     if isinstance(value, (set, frozenset)):
         return '{' + ', '.join(_stable_repr(v) for v in sorted(value, key=repr)) + '}'
@@ -323,7 +323,7 @@ def make_clear_pattern(
       segment comes from the TTL of the region being cleared, so a 5m clear
       cannot reach the 1h entries of the same function.
     - `key_prefix` and `tag` are glob-escaped, so a prefix or tag containing
-      '*', '?' or '[' matches itself rather than its neighbours or nothing
+      '*', '?' or '[' matches itself rather than its neighbors or nothing
       at all.
     """
     region = _seconds_to_region_name(ttl)
@@ -351,7 +351,7 @@ def make_partial_pattern(
     -----
     - `key_prefix` and `tag` are glob-escaped for the same reason
       `make_clear_pattern` escapes them: unescaped, a prefix or tag holding
-      '*', '?' or '[' would either match its neighbours or match nothing.
+      '*', '?' or '[' would either match its neighbors or match nothing.
       `fn_name` is a Python identifier and needs no escaping, and parameter
       values are already escaped by `_render_value` on both sides.
     - `global_clear` drops the `key_prefix` and keeps the region segment,

@@ -5,7 +5,7 @@ Notes
 - When mutex.acquire() returns False the wrapper historically ran the
   function anyway, so lowering lock_timeout to shed load had the opposite
   effect: each waiter that gave up became its own backing-store read.
-- 'run' keeps that behaviour; 'raise' lets a caller shed load instead.
+- 'run' keeps that behavior; 'raise' lets a caller shed load instead.
 """
 import threading
 import time
@@ -25,7 +25,7 @@ def lock_always_times_out(monkeypatch):
 
 
 class TestRunIsTheDefault:
-    """The historical behaviour is untouched unless opted out of.
+    """The historical behavior is untouched unless opted out of.
     """
 
     def test_default_config_runs_on_timeout(self):
@@ -259,7 +259,7 @@ class TestFailOpenIsNotOverridden:
 
 
 class TestAsyncPolicy:
-    """The async wrapper honours the same policy.
+    """The async wrapper honors the same policy.
     """
 
     async def test_async_timed_out_waiter_raises(self, monkeypatch):
@@ -307,7 +307,7 @@ class TestRealContention:
     def test_raise_keeps_store_reads_at_one(self):
         """Under contention only the lock holder reads the store.
 
-        Mutation: keep the stampede behaviour ('run'), which the report
+        Mutation: keep the stampede behavior ('run'), which the report
         measured at 6 store reads for 6 concurrent same-key callers.
         Oracle: hand-derived read count, 1 - exactly the lock holder.
         """
@@ -355,7 +355,7 @@ class TestValidation:
 
     @pytest.mark.parametrize('bad', ['wait', 'RAISE', '', 0])
     def test_unknown_policy_is_rejected(self, bad):
-        """An unrecognised policy raises rather than silently meaning 'run'.
+        """An unrecognized policy raises rather than silently meaning 'run'.
 
         Mutation: skip validation, so a typo like 'Raise' degrades to the
         stampede the caller was trying to avoid.

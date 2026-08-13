@@ -5,7 +5,7 @@ Notes
 - The region registry recorded (package, backend, ttl) but not the tag, so
   `cache_clear(tag=...)` could only pass the tag on as a KEY GLOB and had to
   visit every backend the package had declared.
-- A tag pinned to `backend='memory'` therefore constructed and dialled Redis
+- A tag pinned to `backend='memory'` therefore constructed and dialed Redis
   purely because `configure(redis_url=...)` had been called for unrelated
   caches: 42.21s per call against a blackholed endpoint, around 27 of one
   test module's 29.7 minutes.
@@ -141,7 +141,7 @@ class TestTagClearDoesNotFanOut:
     """
 
     def test_memory_pinned_tag_clear_never_touches_redis(self, redis_clears, built_backends):
-        """The reported 42s clear: Redis is neither built nor dialled.
+        """The reported 42s clear: Redis is neither built nor dialed.
 
         Mutation: drop the tag filter from the region lookup, restoring the
         fan-out that visited every declared backend of the package.
@@ -259,7 +259,7 @@ class TestTagClearDoesNotFanOut:
         `iter_backends`/`_matching` unfiltered. A region built earlier in the
         process is live regardless of which tag asked for it, so a
         long-running service - the case that actually pays this cost, once
-        per fixture teardown or admin call - would keep dialling Redis while
+        per fixture teardown or admin call - would keep dialing Redis while
         a cold test process looked fixed.
         Oracle: the recorded RedisBackend.clear globs, none, with the Redis
         region provably live before the clear.
@@ -311,7 +311,7 @@ class TestTagClearDoesNotFanOut:
         Mutation: rely on the region filter alone and stop scoping the glob
         by tag, which would clear a co-located tag's entries as well.
         Oracle: hand-counted invocation counts, one recompute for the
-        cleared tag and none for its neighbour.
+        cleared tag and none for its neighbor.
         """
         auth_calls = []
         docs_calls = []
