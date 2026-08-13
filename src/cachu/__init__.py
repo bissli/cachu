@@ -1,6 +1,6 @@
 """Flexible caching library with support for memory, file, Redis, and DynamoDB backends.
 """
-__version__ = '0.5.1'
+__version__ = '0.6.0'
 
 from . import backends, presets
 from .api import Backend, CacheEntry, CacheInfo, CacheMeta
