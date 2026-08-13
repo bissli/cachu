@@ -8,6 +8,7 @@ from functools import wraps
 from typing import Any
 
 from .api import NO_VALUE, CacheInfo, CacheMeta
+from .backends.dynamodb import DynamoDBBackend
 from .backends.redis import _CURRSIZE_FRESH_PREFIX, _CURRSIZE_LAST_PREFIX
 from .backends.redis import _CURRSIZE_LOCK_PREFIX, RedisBackend
 from .config import VALID_BACKENDS, _get_caller_package, get_config
@@ -183,7 +184,8 @@ def cache(
         view used for the cache key, with self/cls/_-prefixed/excluded/
         connection-like values dropped).
     backend : str or None, default None
-        'memory', 'file', 'redis' or 'null'; the configured default if None.
+        'memory', 'file', 'redis', 'dynamodb' or 'null'; the configured
+        default if None.
         'null' never stores anything, so it switches off one cache without
         the process-wide `disable()`.
     tag : str, default ''
@@ -615,6 +617,9 @@ def get_cache_info(fn: Callable[..., Any]) -> CacheInfo:
     - On Redis it is served from the stale-while-revalidate cache shared
       with the async path, so repeated views cost one keyspace SCAN per
       `_CURRSIZE_FRESH_TTL` rather than one per call.
+    - On DynamoDB it is served from an in-process 60-second memo, so
+      repeated views cost one table Scan per interval per process rather
+      than one full-table read per call.
     """
     meta = getattr(fn, '_cache_meta', None)
     if meta is None:
@@ -639,6 +644,10 @@ def get_cache_info(fn: Callable[..., Any]) -> CacheInfo:
         if isinstance(backend_instance, RedisBackend):
             currsize = _get_cached_currsize(
                 backend_instance, meta.package, fn_name, meta.ttl, meta.tag, pattern)
+        elif isinstance(backend_instance, DynamoDBBackend):
+            # A DynamoDB count Scan bills the whole table, so a polled
+            # stats view must be answered from the backend's memo.
+            currsize = backend_instance.cached_count(pattern)
         else:
             currsize = backend_instance.count(pattern)
     except Exception:
@@ -867,6 +876,10 @@ async def get_async_cache_info(fn: Callable[..., Any]) -> CacheInfo:
         if isinstance(backend_instance, RedisBackend):
             currsize = await _get_cached_currsize_async(
                 backend_instance, meta.package, fn_name, meta.ttl, meta.tag, pattern)
+        elif isinstance(backend_instance, DynamoDBBackend):
+            # A DynamoDB count Scan bills the whole table, so a polled
+            # stats view must be answered from the backend's memo.
+            currsize = await backend_instance.acached_count(pattern)
         else:
             currsize = await backend_instance.acount(pattern)
     except Exception:

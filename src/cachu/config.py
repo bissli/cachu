@@ -16,7 +16,7 @@ from .exception import ConfigurationError
 
 logger = logging.getLogger(__name__)
 
-VALID_BACKENDS = ('memory', 'redis', 'file', 'null')
+VALID_BACKENDS = ('memory', 'redis', 'file', 'null', 'dynamodb')
 VALID_LOCK_TIMEOUT_ACTIONS = ('run', 'raise')
 
 _disabled: bool = False
@@ -118,7 +118,7 @@ def disable(package: str | None = None, tag: str | None = None) -> None:
 
     Notes
     -----
-    - `disable()` with no arguments keeps the historical global behaviour:
+    - `disable()` with no arguments keeps the historical global behavior:
       every cache in the process is bypassed.
     - Scoped calls accumulate, so `disable(package='a')` followed by
       `disable(tag='docs')` switches off both scopes.
@@ -268,6 +268,25 @@ class CacheConfig:
         addresses the endpoint resolves to.
     redis_retry_count : int, default 3
         Retry attempts redis-py makes per operation.
+    dynamodb_table : str, default 'cachu-cache'
+        Table name for the 'dynamodb' backend. The table must already
+        exist; `cachu.backends.dynamodb.create_dynamodb_table` creates it
+        with the expected schema.
+    dynamodb_region : str or None, default None
+        AWS region for the 'dynamodb' backend; boto3's default resolution
+        chain when None.
+    dynamodb_endpoint_url : str or None, default None
+        Endpoint override for the 'dynamodb' backend, e.g. a DynamoDB
+        Local URL.
+    dynamodb_timeout : float, default 5.0
+        Seconds botocore gets as BOTH connect_timeout and read_timeout;
+        each retry attempt gets its own budget.
+    dynamodb_retry_count : int, default 3
+        Retry attempts botocore makes per operation on top of the first.
+    dynamodb_consistent_reads : bool, default True
+        Strongly consistent reads for the 'dynamodb' backend. True keeps
+        read-your-writes semantics at twice the read cost; False halves
+        the cost and tolerates seconds of staleness.
     fail_open : bool, default True
         Degrade backend faults to a cache miss instead of raising.
     cache_deadline : float or None, default None
@@ -275,7 +294,7 @@ class CacheConfig:
         measured between backend operations: an operation already in flight
         is never interrupted, and time spent waiting for another caller's
         function is refunded rather than charged. None keeps the historical
-        unbounded behaviour.
+        unbounded behavior.
     on_lock_timeout : {'run', 'raise'}, default 'run'
         What a caller does when it fails to take the dogpile mutex.
     memory_maxsize : int or None, default None
@@ -283,7 +302,7 @@ class CacheConfig:
     memory_sweep_interval : float, default 60.0
         Minimum seconds between amortized expired-entry sweeps of the
         'memory' backend. 0 sweeps on every operation; `float('inf')`
-        disables sweeping and restores the pre-0.4.0 behaviour.
+        disables sweeping and restores the pre-0.4.0 behavior.
 
     Notes
     -----
@@ -316,6 +335,12 @@ class CacheConfig:
     redis_health_check_interval: int = 30
     redis_socket_timeout: float = 5.0
     redis_retry_count: int = 3
+    dynamodb_table: str = 'cachu-cache'
+    dynamodb_region: str | None = None
+    dynamodb_endpoint_url: str | None = None
+    dynamodb_timeout: float = 5.0
+    dynamodb_retry_count: int = 3
+    dynamodb_consistent_reads: bool = True
     fail_open: bool = True
     cache_deadline: float | None = None
     on_lock_timeout: str = 'run'
@@ -347,6 +372,12 @@ class ConfigRegistry:
         redis_health_check_interval: int | None = None,
         redis_socket_timeout: float | None = None,
         redis_retry_count: int | None = None,
+        dynamodb_table: str | None = None,
+        dynamodb_region: str | None = None,
+        dynamodb_endpoint_url: str | None = None,
+        dynamodb_timeout: float | None = None,
+        dynamodb_retry_count: int | None = None,
+        dynamodb_consistent_reads: bool | None = None,
         fail_open: bool | None = None,
         cache_deadline: float | None = None,
         on_lock_timeout: str | None = None,
@@ -367,6 +398,12 @@ class ConfigRegistry:
             'redis_health_check_interval': redis_health_check_interval,
             'redis_socket_timeout': redis_socket_timeout,
             'redis_retry_count': redis_retry_count,
+            'dynamodb_table': dynamodb_table,
+            'dynamodb_region': dynamodb_region,
+            'dynamodb_endpoint_url': dynamodb_endpoint_url,
+            'dynamodb_timeout': dynamodb_timeout,
+            'dynamodb_retry_count': dynamodb_retry_count,
+            'dynamodb_consistent_reads': dynamodb_consistent_reads,
             'fail_open': fail_open,
             'cache_deadline': cache_deadline,
             'on_lock_timeout': on_lock_timeout,
@@ -416,15 +453,35 @@ class ConfigRegistry:
                 raise ConfigurationError(
                     f'on_lock_timeout must be one of {VALID_LOCK_TIMEOUT_ACTIONS}, got {action!r}')
 
-        for name in ('lock_timeout', 'cache_deadline', 'redis_socket_timeout'):
+        if 'dynamodb_table' in kwargs:
+            table = kwargs['dynamodb_table']
+            if not isinstance(table, str) or not table:
+                raise ConfigurationError(
+                    f'dynamodb_table must be a non-empty string, got {table!r}')
+
+        for name in ('lock_timeout', 'cache_deadline', 'redis_socket_timeout',
+                     'dynamodb_timeout'):
             if name in kwargs and not _is_positive_number(kwargs[name]):
                 raise ConfigurationError(
                     f'{name} must be a positive number of seconds, got {kwargs[name]!r}')
 
-        for name in ('redis_retry_count', 'redis_health_check_interval'):
+        for name in ('redis_retry_count', 'redis_health_check_interval',
+                     'dynamodb_retry_count'):
             if name in kwargs and not _is_whole_number(kwargs[name], minimum=0):
                 raise ConfigurationError(
                     f'{name} must be a non-negative integer, got {kwargs[name]!r}')
+
+        # Notes:
+        # - Validated as a strict bool because the value is forwarded to
+        #   botocore's ConsistentRead parameter, which rejects non-bools:
+        #   a truthy string would pass configure() and then fail every
+        #   read with ParamValidationError, which fail_open converts into
+        #   a silent 100% miss.
+        if 'dynamodb_consistent_reads' in kwargs:
+            if not isinstance(kwargs['dynamodb_consistent_reads'], bool):
+                raise ConfigurationError(
+                    'dynamodb_consistent_reads must be a boolean, got '
+                    f"{kwargs['dynamodb_consistent_reads']!r}")
 
         if 'memory_maxsize' in kwargs and not _is_whole_number(kwargs['memory_maxsize'], minimum=1):
             raise ConfigurationError(
@@ -471,6 +528,12 @@ def configure(
     redis_health_check_interval: int | None = None,
     redis_socket_timeout: float | None = None,
     redis_retry_count: int | None = None,
+    dynamodb_table: str | None = None,
+    dynamodb_region: str | None = None,
+    dynamodb_endpoint_url: str | None = None,
+    dynamodb_timeout: float | None = None,
+    dynamodb_retry_count: int | None = None,
+    dynamodb_consistent_reads: bool | None = None,
     fail_open: bool | None = None,
     cache_deadline: float | None = None,
     on_lock_timeout: str | None = None,
@@ -486,7 +549,8 @@ def configure(
     Parameters
     ----------
     backend_default : str or None, default None
-        Default backend type: 'memory', 'file', 'redis' or 'null'.
+        Default backend type: 'memory', 'file', 'redis', 'dynamodb' or
+        'null'.
     key_prefix : str or None, default None
         Prefix for all cache keys (for versioning/debugging).
     file_dir : str or None, default None
@@ -503,6 +567,26 @@ def configure(
         the endpoint resolves to.
     redis_retry_count : int or None, default None
         Retries on connection failure (default 3).
+    dynamodb_table : str or None, default None
+        Table for the 'dynamodb' backend (default 'cachu-cache'). Must
+        already exist; `cachu.backends.dynamodb.create_dynamodb_table`
+        creates it with the expected schema.
+    dynamodb_region : str or None, default None
+        AWS region for the 'dynamodb' backend; boto3's default resolution
+        chain when unset.
+    dynamodb_endpoint_url : str or None, default None
+        Endpoint override for the 'dynamodb' backend, e.g. a DynamoDB
+        Local URL.
+    dynamodb_timeout : float or None, default None
+        botocore connect AND read timeout in seconds (default 5.0); each
+        retry attempt gets its own budget.
+    dynamodb_retry_count : int or None, default None
+        botocore retries per operation on top of the first attempt
+        (default 3).
+    dynamodb_consistent_reads : bool or None, default None
+        Strongly consistent DynamoDB reads (default True). True keeps
+        read-your-writes semantics at twice the read cost; False halves
+        the cost and tolerates seconds of staleness.
     fail_open : bool or None, default None
         When True (default), backend construction, read and lock errors
         degrade to a cache miss; when False they propagate to the caller.
@@ -514,9 +598,9 @@ def configure(
         are skipped, so a wedged backend costs at most this much plus the
         one call already in flight, plus the mutex release if the lock was
         held - two uninterruptible operations, not one. None (default) keeps
-        the unbounded behaviour.
+        the unbounded behavior.
     on_lock_timeout : {'run', 'raise'} or None, default None
-        Behaviour when the dogpile mutex cannot be taken within
+        Behavior when the dogpile mutex cannot be taken within
         `lock_timeout`. 'run' (default) executes the function anyway; 'raise'
         raises `cachu.CacheLockTimeout` so load can be shed instead of
         stampeding the backing store.
@@ -563,6 +647,12 @@ def configure(
         redis_health_check_interval=redis_health_check_interval,
         redis_socket_timeout=redis_socket_timeout,
         redis_retry_count=redis_retry_count,
+        dynamodb_table=dynamodb_table,
+        dynamodb_region=dynamodb_region,
+        dynamodb_endpoint_url=dynamodb_endpoint_url,
+        dynamodb_timeout=dynamodb_timeout,
+        dynamodb_retry_count=dynamodb_retry_count,
+        dynamodb_consistent_reads=dynamodb_consistent_reads,
         fail_open=fail_open,
         cache_deadline=cache_deadline,
         on_lock_timeout=on_lock_timeout,

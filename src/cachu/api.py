@@ -38,10 +38,11 @@ class CacheInfo:
     misses : int
         Cache misses recorded for the function, 0 under the same condition.
     currsize : int
-        Live entries in the function's own TTL region. Approximate on Redis:
-        it comes from a point-in-time SCAN of a keyspace other processes are
-        writing to, served from a 60-second stale-while-revalidate cache, and
-        is 0 when the count failed under `fail_open`.
+        Live entries in the function's own TTL region. Approximate on the
+        network backends: it comes from a point-in-time SCAN of a keyspace
+        other processes are writing to, served from a 60-second cache (a
+        Redis-shared stale-while-revalidate entry, or an in-process memo
+        on DynamoDB), and is 0 when the count failed under `fail_open`.
     """
     hits: int
     misses: int

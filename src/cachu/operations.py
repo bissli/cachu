@@ -212,7 +212,7 @@ def cache_clear(
     tag : str or None, default None
         Clear only entries carrying this tag.
     backend : str or None, default None
-        Backend type to clear: 'memory', 'file', 'redis' or 'null'. All
+        Backend type to clear: 'memory', 'file', 'redis', 'dynamodb' or 'null'. All
         backends if None.
     ttl : int or None, default None
         Specific TTL region to clear. All TTL regions if None.
@@ -434,7 +434,7 @@ async def async_cache_clear(
     tag : str or None, default None
         Clear only entries carrying this tag.
     backend : str or None, default None
-        Backend type to clear: 'memory', 'file', 'redis' or 'null'. All
+        Backend type to clear: 'memory', 'file', 'redis', 'dynamodb' or 'null'. All
         backends if None.
     ttl : int or None, default None
         Specific TTL region to clear. All TTL regions if None.

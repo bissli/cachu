@@ -13,8 +13,8 @@ import subprocess
 import sys
 
 import cachu
-from cachu.backends import MemoryBackend, NullBackend, RedisBackend
-from cachu.backends import SqliteBackend
+from cachu.backends import DynamoDBBackend, MemoryBackend, NullBackend
+from cachu.backends import RedisBackend, SqliteBackend
 from cachu.config import VALID_BACKENDS
 
 
@@ -35,6 +35,7 @@ class TestBackendsPackageExports:
             'file': 'sqlite',
             'redis': 'redis',
             'null': 'null',
+            'dynamodb': 'dynamodb',
         }
 
         assert set(module_for_backend) == set(VALID_BACKENDS)
@@ -46,9 +47,10 @@ class TestBackendsPackageExports:
         """The concrete classes are reachable without a submodule path.
 
         Mutation: export the modules but not the classes.
-        Oracle: the four documented backend classes.
+        Oracle: the five documented backend classes.
         """
-        for cls in (MemoryBackend, NullBackend, RedisBackend, SqliteBackend):
+        for cls in (DynamoDBBackend, MemoryBackend, NullBackend, RedisBackend,
+                    SqliteBackend):
             assert cls.__name__ in cachu.backends.__all__
             assert getattr(cachu.backends, cls.__name__) is cls
 
@@ -66,14 +68,16 @@ class TestBackendsPackageExports:
         binds the submodule attribute as a side effect. The line is kept as
         the intentional declaration rather than relying on that accident -
         which is the coupling that made the null backend invisible in the
-        first place - but the two are behaviourally identical.
+        first place - but the two are behaviorally identical.
         """
         probe = (
             'import cachu; '
             "assert 'backends' in cachu.__all__, 'backends missing from __all__'; "
-            "names = ['MemoryBackend', 'NullBackend', 'RedisBackend', 'SqliteBackend']; "
+            "names = ['DynamoDBBackend', 'MemoryBackend', 'NullBackend', "
+            "'RedisBackend', 'SqliteBackend']; "
             'assert all(hasattr(cachu.backends, n) for n in names), '
             'sorted(cachu.backends.__all__); '
+            "assert hasattr(cachu, 'create_dynamodb_table'), 'table helper missing'; "
             'print("ok")'
         )
         result = subprocess.run(
@@ -83,6 +87,17 @@ class TestBackendsPackageExports:
         assert result.returncode == 0, result.stderr
         assert result.stdout.strip() == 'ok'
         assert cachu.backends.NullBackend is NullBackend
+
+    def test_table_helper_is_exported_top_level(self):
+        """cachu.create_dynamodb_table is reachable from the top-level package.
+
+        Mutation: drop the export, leaving the README's documented setup
+        call an AttributeError.
+        Oracle: the documented top-level name, identical to the backend
+        module's function.
+        """
+        assert 'create_dynamodb_table' in cachu.__all__
+        assert cachu.create_dynamodb_table is cachu.backends.dynamodb.create_dynamodb_table
 
 
 class TestNullBackendIsSelectable:

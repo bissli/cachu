@@ -1,9 +1,10 @@
-"""Flexible caching library with support for memory, file, and Redis backends.
+"""Flexible caching library with support for memory, file, Redis, and DynamoDB backends.
 """
 __version__ = '0.5.1'
 
 from . import backends, presets
 from .api import Backend, CacheEntry, CacheInfo, CacheMeta
+from .backends.dynamodb import create_dynamodb_table
 from .backends.redis import get_redis_client
 from .config import VALID_BACKENDS as BACKENDS
 from .config import CacheConfig, DisabledScopes, configure, disable, enable
@@ -46,6 +47,7 @@ __all__ = [
     'clear_async_backends',
     'clear_backends',
     'configure',
+    'create_dynamodb_table',
     'disable',
     'enable',
     'get_all_configs',

@@ -1,7 +1,7 @@
 # cachu
 *pronunciation: ka-SHOO*
 
-Flexible caching library with support for memory, file, Redis, and null backends.
+Flexible caching library with support for memory, file, Redis, DynamoDB, and null backends.
 
 ## Installation
 
@@ -15,6 +15,12 @@ pip install cachu
 
 ```bash
 pip install cachu[redis]
+```
+
+**With DynamoDB support:**
+
+```bash
+pip install cachu[dynamodb]
 ```
 
 ## Quick Start
@@ -43,7 +49,7 @@ Configure cache settings at application startup:
 import cachu
 
 cachu.configure(
-    backend_default='memory',   # Default backend: 'memory', 'file', 'redis', or 'null'
+    backend_default='memory',   # Default backend: 'memory', 'file', 'redis', 'dynamodb', or 'null'
     key_prefix='v1:',           # Prefix for all cache keys
     file_dir='/var/cache/app',  # Directory for file cache
     redis_url='redis://localhost:6379/0',  # Redis connection URL
@@ -52,22 +58,28 @@ cachu.configure(
 
 ### Configuration Options
 
-| Option                        | Default                      | Description                                                                                                                                                                                                                     |
-| ----------------------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `backend_default`             | `'memory'`                   | Default backend: `'memory'`, `'file'`, `'redis'`, or `'null'`                                                                                                                                                                   |
-| `key_prefix`                  | `''`                         | Prefix for all cache keys (useful for versioning)                                                                                                                                                                               |
-| `file_dir`                    | `'/tmp'`                     | Directory for file-based caches                                                                                                                                                                                                 |
-| `redis_url`                   | `'redis://localhost:6379/0'` | Redis connection URL (supports `rediss://` for TLS)                                                                                                                                                                             |
-| `package`                     | caller's package             | Which package's configuration to set; a parameter, not a stored field ([details](#package-isolation))                                                                                                                           |
-| `fail_open`                   | `True`                       | Degrade cache faults to a miss instead of raising ([details](#failure-semantics))                                                                                                                                               |
-| `cache_deadline`              | `None`                       | Cumulative cache work per call, checked *between* backend operations - it cannot interrupt one already in flight ([details](#bounding-cache-latency))                                                                           |
-| `lock_timeout`                | `10.0`                       | Seconds to wait for the per-key dogpile mutex; **lowering it increases** backing-store load under the default `on_lock_timeout='run'` ([details](#dogpile-and-lock-timeouts))                                                   |
-| `on_lock_timeout`             | `'run'`                      | `'run'` or `'raise'` when the mutex is missed ([details](#dogpile-and-lock-timeouts))                                                                                                                                           |
-| `memory_maxsize`              | `None`                       | LRU bound for the memory backend ([details](#bounding-the-memory-backend))                                                                                                                                                      |
-| `memory_sweep_interval`       | `60.0`                       | Seconds between expired-entry sweeps of the memory backend ([details](#bounding-the-memory-backend))                                                                                                                            |
+| Option                        | Default                      | Description                                                                                                                                                                                                                           |
+| ----------------------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `backend_default`             | `'memory'`                   | Default backend: `'memory'`, `'file'`, `'redis'`, `'dynamodb'`, or `'null'`                                                                                                                                                           |
+| `key_prefix`                  | `''`                         | Prefix for all cache keys (useful for versioning)                                                                                                                                                                                     |
+| `file_dir`                    | `'/tmp'`                     | Directory for file-based caches                                                                                                                                                                                                       |
+| `redis_url`                   | `'redis://localhost:6379/0'` | Redis connection URL (supports `rediss://` for TLS)                                                                                                                                                                                   |
+| `package`                     | caller's package             | Which package's configuration to set; a parameter, not a stored field ([details](#package-isolation))                                                                                                                                 |
+| `fail_open`                   | `True`                       | Degrade cache faults to a miss instead of raising ([details](#failure-semantics))                                                                                                                                                     |
+| `cache_deadline`              | `None`                       | Cumulative cache work per call, checked *between* backend operations - it cannot interrupt one already in flight ([details](#bounding-cache-latency))                                                                                 |
+| `lock_timeout`                | `10.0`                       | Seconds to wait for the per-key dogpile mutex; **lowering it increases** backing-store load under the default `on_lock_timeout='run'` ([details](#dogpile-and-lock-timeouts))                                                         |
+| `on_lock_timeout`             | `'run'`                      | `'run'` or `'raise'` when the mutex is missed ([details](#dogpile-and-lock-timeouts))                                                                                                                                                 |
+| `memory_maxsize`              | `None`                       | LRU bound for the memory backend ([details](#bounding-the-memory-backend))                                                                                                                                                            |
+| `memory_sweep_interval`       | `60.0`                       | Seconds between expired-entry sweeps of the memory backend ([details](#bounding-the-memory-backend))                                                                                                                                  |
 | `redis_socket_timeout`        | `5.0`                        | Socket timeout, applied to **both** connect and read, and shared across one whole connect attempt rather than restarted per resolved address; the only thing that bounds one in-flight operation ([details](#bounding-cache-latency)) |
-| `redis_retry_count`           | `3`                          | redis-py retries per operation - they run *inside* one operation, so they multiply its worst case ([details](#bounding-cache-latency))                                                                                          |
-| `redis_health_check_interval` | `30`                         | Seconds between redis-py connection health checks                                                                                                                                                                               |
+| `redis_retry_count`           | `3`                          | redis-py retries per operation - they run *inside* one operation, so they multiply its worst case ([details](#bounding-cache-latency))                                                                                                |
+| `redis_health_check_interval` | `30`                         | Seconds between redis-py connection health checks                                                                                                                                                                                     |
+| `dynamodb_table`              | `'cachu-cache'`              | DynamoDB table name; must already exist ([details](#dynamodb-table-setup))                                                                                                                                                            |
+| `dynamodb_region`             | `None`                       | AWS region; boto3's default resolution chain when unset                                                                                                                                                                               |
+| `dynamodb_endpoint_url`       | `None`                       | Endpoint override, e.g. a DynamoDB Local URL                                                                                                                                                                                          |
+| `dynamodb_timeout`            | `5.0`                        | botocore connect **and** read timeout; each retry attempt gets its own budget ([details](#bounding-cache-latency))                                                                                                                    |
+| `dynamodb_retry_count`        | `3`                          | botocore retries per operation on top of the first attempt - they run *inside* one operation, so they multiply its worst case                                                                                                         |
+| `dynamodb_consistent_reads`   | `True`                       | Strongly consistent reads; `False` halves the read cost but tolerates seconds of staleness after a write or clear                                                                                                                     |
 
 `configure()` only changes the settings you pass, and `None` means "leave unchanged" -
 so an option whose default is `None` cannot be reset through the public API once set.
@@ -81,11 +93,11 @@ cached call and the second group never bites you; `backend_default` is resolved 
 decorator *runs*, so it must be set before the module holding the `@cache` is imported -
 otherwise name the backend on the decorator.
 
-| Read when                                | Settings                                                                                                                                                                                                    |
-| ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Decoration (import time)                 | `backend_default`                                                                                                                                                                                           |
-| Backend construction (first cached call) | `redis_url`, `redis_socket_timeout`, `redis_retry_count`, `redis_health_check_interval`, `file_dir`, `memory_maxsize`, `memory_sweep_interval`, and `lock_timeout` as the Redis lock key's self-heal expiry |
-| Every call                               | `key_prefix`, `fail_open`, `cache_deadline`, `on_lock_timeout`, and `lock_timeout` as the wait length                                                                                                       |
+| Read when                                | Settings                                                                                                                                                                                                                                                                                                                                             |
+| ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Decoration (import time)                 | `backend_default`                                                                                                                                                                                                                                                                                                                                    |
+| Backend construction (first cached call) | `redis_url`, `redis_socket_timeout`, `redis_retry_count`, `redis_health_check_interval`, `dynamodb_table`, `dynamodb_region`, `dynamodb_endpoint_url`, `dynamodb_timeout`, `dynamodb_retry_count`, `dynamodb_consistent_reads`, `file_dir`, `memory_maxsize`, `memory_sweep_interval`, and `lock_timeout` as the distributed lock's self-heal expiry |
+| Every call                               | `key_prefix`, `fail_open`, `cache_deadline`, `on_lock_timeout`, and `lock_timeout` as the wait length                                                                                                                                                                                                                                                |
 
 Changing a construction-time setting after a backend exists has no effect on that
 backend. `cachu.clear_backends()` forces reconstruction if you need it.
@@ -124,6 +136,7 @@ def get_user(user_id: int) -> dict:
 **Key points:**
 - `redis_url` is used whenever `backend='redis'` is specified
 - `file_dir` is used whenever `backend='file'` is specified
+- `dynamodb_table` (with its region/endpoint settings) is used whenever `backend='dynamodb'` is specified
 - `key_prefix` applies to all backends
 - The `backend_default` in `configure()` is just the default when not specified in the decorator
 
@@ -225,14 +238,15 @@ def expensive_operation(param: str) -> dict:
 
 ### Backend Types
 
-cachu ships four backends. All are importable from `cachu.backends` for introspection.
+cachu ships five backends. All are importable from `cachu.backends` for introspection.
 
-| Name       | Class           | Scope             | Use for                                        |
-| ---------- | --------------- | ----------------- | ---------------------------------------------- |
-| `'memory'` | `MemoryBackend` | This process      | Hot lookups; optionally LRU-bounded            |
-| `'file'`   | `SqliteBackend` | This machine      | Results worth surviving a restart              |
-| `'redis'`  | `RedisBackend`  | Every process     | Shared state across workers or hosts           |
-| `'null'`   | `NullBackend`   | Nothing is stored | Switching one cache off, and passthrough tests |
+| Name         | Class             | Scope             | Use for                                        |
+| ------------ | ----------------- | ----------------- | ---------------------------------------------- |
+| `'memory'`   | `MemoryBackend`   | This process      | Hot lookups; optionally LRU-bounded            |
+| `'file'`     | `SqliteBackend`   | This machine      | Results worth surviving a restart              |
+| `'redis'`    | `RedisBackend`    | Every process     | Shared state across workers or hosts           |
+| `'dynamodb'` | `DynamoDBBackend` | Every process     | Shared state on AWS without a Redis to run     |
+| `'null'`     | `NullBackend`     | Nothing is stored | Switching one cache off, and passthrough tests |
 
 ```python
 # Memory cache (default)
@@ -249,6 +263,11 @@ def load_config(name: str) -> dict:
 @cache(ttl=86400, backend='redis')
 def fetch_external_data(api_key: str) -> dict:
     return call_external_api(api_key)
+
+# DynamoDB cache (shared across processes, serverless)
+@cache(ttl=86400, backend='dynamodb')
+def fetch_reference_data(dataset: str) -> dict:
+    return load_reference_data(dataset)
 
 # Null cache (passthrough) - always executes, never caches
 @cache(ttl=300, backend='null')
@@ -678,10 +697,10 @@ class UserRepository:
 A cache is an optimization. On a request path it should only ever be able to cost you
 speed - never the answer, and never an unbounded amount of time. This section covers the
 settings that make that true, and the three places where the default is deliberately the
-pre-0.4 behaviour rather than the safe one.
+pre-0.4 behavior rather than the safe one.
 
 **Those unsafe defaults are deliberate.** `memory_maxsize` (`None`), `cache_deadline`
-(`None`) and `on_lock_timeout` (`'run'`) all keep the historical behaviour, because
+(`None`) and `on_lock_timeout` (`'run'`) all keep the historical behavior, because
 turning any of them on by default would change the outcome of an existing unmodified
 call - a new eviction, a new skipped write, or a new escaping exception. Turn on
 `memory_maxsize` when callers influence the key space, `cache_deadline` when the caller
@@ -714,16 +733,17 @@ throw away a correct answer over a cache-only problem. They are logged, never ra
 
 **A stored value that no longer decodes is a miss, and is logged.** The usual cause is a
 deploy that changes a pickled class while an older release still writes the same key,
-which drives the hit rate to zero for as long as both run. Both the Redis and the file
-backend evict the row and warn (`Evicting undecodable cache row for key ...`), so the
-condition is visible rather than silent.
+which drives the hit rate to zero for as long as both run. The Redis, DynamoDB, and file
+backends all evict the row and warn (`Evicting undecodable cache row for key ...`), so
+the condition is visible rather than silent.
 
 **`fail_open` bounds exceptions, not hangs.** A wedged endpoint - a blackholed address
 rather than a refused connection - blocks inside socket timeouts and never raises, so
 neither `fail_open` nor a `try`/`except` around the call can shorten it. Neither can
 `cache_deadline` on its own: it is checked only *between* backend operations, so a call
-already blocked in a socket read runs to completion. Only `redis_socket_timeout` and
-`redis_retry_count` bound a single in-flight operation - see
+already blocked in a socket read runs to completion. Only the per-operation budgets -
+`redis_socket_timeout` with `redis_retry_count`, or `dynamodb_timeout` with
+`dynamodb_retry_count` - bound a single in-flight operation; see
 [Bounding Cache Latency](#bounding-cache-latency).
 
 **The one deliberate exception** is `on_lock_timeout='raise'`: `CacheLockTimeout`
@@ -744,7 +764,7 @@ Redis timeout budgets compound rather than add:
 
 - `redis_socket_timeout` applies to **both** the connect and the read, and cachu shares
   it across one whole connect attempt rather than restarting it per resolved address -
-  see [below](#what-bounds-the-connect).
+  see [below](#what-bounds-the-redis-connect).
 - redis-py retries each operation `redis_retry_count` times with exponential backoff,
   and those retries run *inside* one logical operation rather than around it.
 - A miss performs six Redis round trips: get, mutex acquire (`SET NX`), the post-lock
@@ -798,7 +818,7 @@ health-checked connection can spend an extra round trip on a `PING`, DNS resolut
 bounded by your resolver rather than by any redis-py timeout, and the retry semantics
 differ across the `redis>=4.2.0` range cachu accepts. cachu logs a warning the
 first time it builds a Redis backend for a package whose deadline the Redis budgets
-cannot honour - on the first Redis-backed call, not inside `configure()`, and not at all
+cannot honor - on the first Redis-backed call, not inside `configure()`, and not at all
 for a package that never touches Redis. Set all three together:
 
 ```python
@@ -813,7 +833,14 @@ cachu.configure(
 `redis_retry_count=0` is the one setting that makes the arithmetic exact, since the
 retries are what compound.
 
-#### What bounds the connect
+The same arithmetic governs the DynamoDB backend: botocore also retries *inside* one
+operation and applies `dynamodb_timeout` per attempt, so its floor is
+`T = dynamodb_timeout * (1 + dynamodb_retry_count)` - plus botocore's standard-mode
+backoff, which sleeps up to `min(2^attempt, 20)` seconds between retries and is
+included in the warning's estimate. The same warning fires on the first
+DynamoDB-backed call whose package deadline the budgets cannot honor.
+
+#### What bounds the Redis connect
 
 redis-py's sync connect loops over every address `getaddrinfo` returns and applies
 `socket_connect_timeout` to **each** of them. An endpoint with several A records - an
@@ -929,7 +956,7 @@ cachu.configure(memory_maxsize=10_000, memory_sweep_interval=60.0)
 
 Set `memory_maxsize` whenever the key space is influenced by callers - a credential
 hash, a tenant id, a search term - since otherwise the cache grows until restart.
-`memory_maxsize` defaults to the historical unbounded behaviour; the 60-second sweep is
+`memory_maxsize` defaults to the historical unbounded behavior; the 60-second sweep is
 on by default.
 
 **Sweep cost.** A sweep is a single O(n) pass under the backend lock, so one caller per
@@ -953,7 +980,7 @@ Set `memory_sweep_interval=float('inf')` to disable sweeping altogether; `0` mea
 "sweep on every operation", which is the opposite.
 
 Both settings are read when the backend is **constructed**, on the first cached call.
-Setting them afterwards has no effect on the existing instance, so configure them at
+Setting them afterward has no effect on the existing instance, so configure them at
 startup (or call `cachu.clear_backends()` to force reconstruction).
 
 ## Testing
@@ -1079,6 +1106,67 @@ backend = cachu.get_backend('redis', ttl=300)
 backend.client.set('direct_key', 'value')
 ```
 
+### DynamoDB Table Setup
+
+The DynamoDB backend expects its table to exist. `create_dynamodb_table` creates it
+with the schema the backend expects - on-demand billing and a single string HASH key
+named `key` holding the SHA-256 digest of the cache key (DynamoDB caps key values at
+2048 bytes, and cachu keys inline call arguments; the readable key is stored in the
+`key_text` attribute). It also enables native TTL on the integer `expires_ttl`
+attribute, and it is idempotent - it verifies an existing table's key schema and TTL
+attribute rather than assuming them - so it is safe in deploy scripts:
+
+```python
+import cachu
+
+cachu.create_dynamodb_table('cachu-cache', region_name='us-east-1')
+cachu.configure(backend_default='dynamodb', dynamodb_table='cachu-cache')
+```
+
+If you provision the table yourself (CloudFormation, Terraform), match that schema.
+Points worth knowing before running it in production:
+
+- **Native TTL is garbage collection, not correctness.** DynamoDB deletes expired
+  items lazily - AWS documents "typically within two days" - and expired items keep
+  appearing in reads and scans until collected. The backend re-checks the exact
+  `expires_at` timestamp on every read and treats a stale row as an evicting miss,
+  so expiry semantics never depend on the collector; enabling TTL just keeps storage
+  from growing without bound.
+- **One table serves every TTL region and package.** Cache rows, dogpile lock rows
+  (`lock:` prefix), and statistics rows (`cachu:stats:` prefix) share the table,
+  exactly as they share one logical DB on Redis. Separate tables are the only real
+  isolation between applications: a `key_prefix` scopes cache and lock rows but not
+  statistics, which are keyed by bare function name.
+- **Statistics are buffered.** Hit/miss counters accumulate in-process and flush as
+  atomic `ADD` updates on reads, on close, or every 100 increments - a write per
+  cache hit would bill a write per read and cap a hot function near a single item's
+  ~1000 writes/s. Counters merge correctly across processes; other processes' counts
+  appear after their flushes.
+- **Item cap.** A pickled value plus its attributes must fit DynamoDB's 400 KB item
+  limit. An oversized write raises inside the backend; the decorator treats every
+  cache write as best-effort and logs the fault, whichever way `fail_open` is set,
+  so the call returns its result uncached.
+- **Pattern operations bill a full table read.** `keys()`, `count()`, and pattern
+  clears Scan the table; the `begins_with` filter on the pattern's literal prefix
+  bounds what crosses the wire, never what is read or charged, because DynamoDB
+  applies Scan filters after the read. Fine for operational clears; not a hot-path
+  operation on large tables. `cache_info` is served from a 60-second in-process
+  count memo for the same reason.
+- **The dogpile lock is single-Region.** Lock takeover compares the acquirer's clock
+  against the holder's, so it is exact only up to clock skew between hosts - it is a
+  dogpile suppressor, not a correctness lock - and global tables' last-writer-wins
+  reconciliation breaks the exclusion entirely.
+- **The async API is thread-offloaded.** boto3 has no async client, so async calls
+  run the sync client in `asyncio.to_thread`'s shared default executor; a wedged
+  endpoint holds one of its threads for up to `dynamodb_timeout * (1 +
+  dynamodb_retry_count)` seconds, so size those knobs for the latency budget.
+- **IAM.** The backend needs `GetItem`, `PutItem`, `DeleteItem`, `UpdateItem`,
+  `Scan`, and `BatchWriteItem` on the table; `create_dynamodb_table` additionally
+  needs `CreateTable`, `DescribeTable`, `DescribeTimeToLive`, and
+  `UpdateTimeToLive`.
+- **Local development.** Point `dynamodb_endpoint_url` at DynamoDB Local, or run
+  tests under [moto](https://github.com/getmoto/moto) as cachu's own suite does.
+
 ## Public API
 
 ```python
@@ -1136,6 +1224,7 @@ from cachu import (
     get_backend,
     aget_backend,
     get_redis_client,
+    create_dynamodb_table,
     clear_backends,
     clear_async_backends,
 )
@@ -1143,7 +1232,7 @@ from cachu import (
 
 ## Features
 
-- **Multiple backends**: Memory, file (SQLite), Redis, and null (passthrough)
+- **Multiple backends**: Memory, file (SQLite), Redis, DynamoDB, and null (passthrough)
 - **Async support**: Full async/await API; `@cache` detects coroutine functions
 - **Flexible TTL**: Static or dynamic TTL (callable that receives result, optionally with call args)
 - **Tags**: Organize and selectively clear cache entries
@@ -1157,7 +1246,7 @@ from cachu import (
 - **Statistics**: Track hits, misses, and cache size; fail-open and scan-free behind a status endpoint
 - **Intelligent filtering**: Auto-excludes `self`, `cls`, connections, and `_` params
 - **Fail-open by default**: Backend, mutex and read faults degrade to a miss; write and stat faults are logged and never raised
-- **Bounded latency**: `cache_deadline` caps cumulative cache work between operations; pair it with `redis_socket_timeout`, which bounds a single blocked call and is shared across one whole connect attempt
+- **Bounded latency**: `cache_deadline` caps cumulative cache work between operations; pair it with `redis_socket_timeout` or `dynamodb_timeout`, which bound a single blocked call
 - **Load shedding**: `on_lock_timeout='raise'` sheds waiters instead of stampeding
 - **Bounded memory**: Optional LRU `memory_maxsize` plus amortized expiry sweeps
 - **Scoped disable**: Bypass caching globally, or by package or tag

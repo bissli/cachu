@@ -119,4 +119,5 @@ def sample_function():
 
 pytest_plugins = [
     '_fixtures.redis',
+    '_fixtures.dynamodb',
 ]

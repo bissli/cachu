@@ -1,12 +1,14 @@
 """Mutex implementations for cache dogpile prevention.
 """
 import asyncio
+import hashlib
+import math
 import threading
 import time
 import uuid
 import weakref
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, ClassVar, Self
+from typing import TYPE_CHECKING, Any, ClassVar, Self
 
 if TYPE_CHECKING:
     import redis
@@ -322,6 +324,189 @@ class AsyncRedisMutex(AsyncCacheMutex):
             self._acquired = False
 
 
+_DDB_POLL_BASE_DELAY = 0.05
+_DDB_POLL_MAX_DELAY = 1.0
+
+
+class DynamoDBMutex(CacheMutex):
+    """Distributed lock using a DynamoDB conditional put.
+
+    Parameters
+    ----------
+    client : Any
+        Low-level boto3 'dynamodb' client.
+    table_name : str
+        Table holding the lock items.
+    key : str
+        Full lock item key, e.g. 'lock:<mangled cache key>'.
+    lock_timeout : float, default 10.0
+        Seconds after which an unreleased lock may be taken over, floored
+        at 1 second exactly as the Redis mutex floors its EX.
+
+    Notes
+    -----
+    - The lock item's schema matches `DynamoDBBackend`'s rows: the
+      partition key is the SHA-256 digest of `key` (DynamoDB caps key
+      values at 2048 bytes and lock keys embed cache keys), the readable
+      key travels in 'key_text', and the integer 'expires_ttl' attribute
+      lets one native-TTL specification garbage-collect abandoned locks
+      along with expired entries.
+    - DynamoDB has no server-side expiry at read time (native TTL deletes
+      lazily), so takeover is part of the acquire condition itself:
+      `attribute_not_exists(key) OR expires_at < now`. Conditional writes
+      are evaluated against the most recently updated item version and
+      writes apply in order, so two concurrent acquirers cannot both
+      succeed.
+    - `:now` is the acquirer's wall clock and 'expires_at' was written
+      from the holder's, so takeover is exact only up to clock skew
+      between hosts: this is a dogpile suppressor, not a correctness
+      lock. Global tables reconcile last-writer-wins across Regions,
+      which breaks the exclusion entirely - single-Region tables only.
+    - Without the 1-second lifetime floor, a sub-second `lock_timeout`
+      let every waiter's poll window reach the holder's expiry, so
+      `on_lock_timeout='raise'` could never fire and lowering
+      `lock_timeout` produced the very stampede it exists to shed.
+    - A failed conditional put is still a billed write (minimum 1 WCU)
+      against the one item everyone is waiting on, so the poll backs off
+      exponentially instead of hammering a fixed 50 ms.
+    """
+
+    def __init__(
+        self,
+        client: Any,
+        table_name: str,
+        key: str,
+        lock_timeout: float = 10.0,
+    ) -> None:
+        self._client = client
+        self._table_name = table_name
+        self._key = key
+        self._hashed_key = hashlib.sha256(key.encode()).hexdigest()
+        self._lock_timeout = lock_timeout
+        self._token = str(uuid.uuid4())
+        self._acquired = False
+
+    def _try_put(self) -> bool:
+        """Make exactly one conditional-put attempt to take the lock.
+        """
+        now = time.time()
+        expires = now + max(self._lock_timeout, 1.0)
+        try:
+            self._client.put_item(
+                TableName=self._table_name,
+                Item={
+                    'key': {'S': self._hashed_key},
+                    'key_text': {'S': self._key},
+                    'token': {'S': self._token},
+                    'expires_at': {'N': str(expires)},
+                    'expires_ttl': {'N': str(math.ceil(expires))},
+                },
+                ConditionExpression='attribute_not_exists(#k) OR #e < :now',
+                ExpressionAttributeNames={'#k': 'key', '#e': 'expires_at'},
+                ExpressionAttributeValues={':now': {'N': str(now)}},
+            )
+            return True
+        except self._client.exceptions.ConditionalCheckFailedException:
+            return False
+
+    def acquire(self, timeout: float | None = None) -> bool:
+        """Poll the conditional put until acquired or `timeout` seconds elapse.
+
+        Notes
+        -----
+        - A timeout of 0 makes exactly one attempt and returns, matching
+          threading.Lock.acquire(timeout=0). Only None falls back to the
+          configured lock_timeout - a falsy-check here would have turned an
+          explicit 0 into a full-length wait.
+        - The poll delay doubles from 50 ms to a 1 s cap: every failed
+          attempt is a billed write serialized on the contended item.
+        - Each poll iteration also pays a full boto3 request budget, so
+          against an unreachable endpoint the wall time is driven by the
+          client's connect/read timeouts, not by the sleeps.
+        """
+        if timeout is None:
+            timeout = self._lock_timeout
+        end = time.monotonic() + timeout
+        delay = _DDB_POLL_BASE_DELAY
+        while True:
+            if self._try_put():
+                self._acquired = True
+                return True
+            if not time.monotonic() < end:
+                return False
+            time.sleep(delay)
+            delay = min(delay * 2, _DDB_POLL_MAX_DELAY)
+
+    def release(self) -> None:
+        """Delete the lock item, but only while this mutex still owns it.
+
+        Notes
+        -----
+        - The delete is conditional on the stored token: a lock that
+          expired and was taken over by another caller must not be freed
+          by the original holder's release. The failed condition is
+          swallowed - by then the lock is simply no longer ours.
+        """
+        if self._acquired:
+            try:
+                self._client.delete_item(
+                    TableName=self._table_name,
+                    Key={'key': {'S': self._hashed_key}},
+                    ConditionExpression='#t = :token',
+                    ExpressionAttributeNames={'#t': 'token'},
+                    ExpressionAttributeValues={':token': {'S': self._token}},
+                )
+            except self._client.exceptions.ConditionalCheckFailedException:
+                pass
+            self._acquired = False
+
+
+class AsyncDynamoDBMutex(AsyncCacheMutex):
+    """Async distributed lock delegating to `DynamoDBMutex` via threads.
+
+    Notes
+    -----
+    - boto3 has no async client, so each single-attempt conditional put
+      runs in a worker thread while the 50 ms poll wait stays on the event
+      loop; only the request itself ever occupies a thread.
+    """
+
+    def __init__(
+        self,
+        client: Any,
+        table_name: str,
+        key: str,
+        lock_timeout: float = 10.0,
+    ) -> None:
+        self._sync_mutex = DynamoDBMutex(client, table_name, key, lock_timeout)
+        self._lock_timeout = lock_timeout
+
+    async def acquire(self, timeout: float | None = None) -> bool:
+        """Poll the conditional put until acquired or `timeout` seconds elapse.
+
+        Notes
+        -----
+        - A timeout of 0 makes exactly one attempt and returns; only None
+          falls back to the configured lock_timeout.
+        - The poll delay doubles from 50 ms to a 1 s cap, exactly as the
+          sync mutex backs off: every failed attempt is a billed write.
+        """
+        if timeout is None:
+            timeout = self._lock_timeout
+        end = time.monotonic() + timeout
+        delay = _DDB_POLL_BASE_DELAY
+        while True:
+            if await asyncio.to_thread(self._sync_mutex.acquire, 0):
+                return True
+            if not time.monotonic() < end:
+                return False
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, _DDB_POLL_MAX_DELAY)
+
+    async def release(self) -> None:
+        await asyncio.to_thread(self._sync_mutex.release)
+
+
 __all__ = [
     'CacheMutex',
     'AsyncCacheMutex',
@@ -331,4 +516,6 @@ __all__ = [
     'AsyncioMutex',
     'RedisMutex',
     'AsyncRedisMutex',
+    'DynamoDBMutex',
+    'AsyncDynamoDBMutex',
 ]

@@ -505,7 +505,7 @@ class TestAsyncMirrorsSync:
 
 
 class TestDefaultIsUnbounded:
-    """No deadline configured means no behaviour change at all.
+    """No deadline configured means no behavior change at all.
     """
 
     def test_without_deadline_every_cache_step_runs(self, clock, monkeypatch):
@@ -564,7 +564,7 @@ class TestAsyncBudget:
 
 
 class TestUnenforceableDeadlineIsReported:
-    """A deadline the Redis budgets cannot honour is called out, not silently
+    """A deadline the Redis budgets cannot honor is called out, not silently
     patched over.
 
     Notes
@@ -597,7 +597,7 @@ class TestUnenforceableDeadlineIsReported:
             cachu.get_backend('redis', ttl=300)
 
         messages = [r.message for r in caplog.records]
-        assert any('cannot be honoured' in m and '20s' in m for m in messages)
+        assert any('cannot be honored' in m and '20s' in m for m in messages)
 
     def test_configured_socket_timeout_is_never_overridden(self, caplog):
         """A deadline does not rewrite an explicitly configured socket timeout.
@@ -637,7 +637,7 @@ class TestUnenforceableDeadlineIsReported:
         with caplog.at_level(logging.WARNING, logger='cachu.manager'):
             cachu.get_backend('redis', ttl=300)
 
-        assert [r for r in caplog.records if 'cannot be honoured' in r.message] == []
+        assert [r for r in caplog.records if 'cannot be honored' in r.message] == []
 
     def test_no_deadline_never_warns(self, caplog):
         """Callers who set no deadline are not warned about timeouts.
@@ -651,7 +651,7 @@ class TestUnenforceableDeadlineIsReported:
             backend = cachu.get_backend('redis', ttl=300)
 
         assert backend._socket_timeout == pytest.approx(5.0)
-        assert [r for r in caplog.records if 'cannot be honoured' in r.message] == []
+        assert [r for r in caplog.records if 'cannot be honored' in r.message] == []
 
 
 class TestValidation:

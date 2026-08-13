@@ -15,28 +15,45 @@ from .util import _normalize_tag
 logger = logging.getLogger(__name__)
 
 
-def _warn_if_deadline_unenforceable(cfg: CacheConfig) -> None:
-    """Warn when the Redis budgets make `cache_deadline` unreachable.
+def _warn_if_deadline_unenforceable(
+    cfg: CacheConfig,
+    label: str,
+    timeout_name: str,
+    retry_name: str,
+    retry_sleep_ceiling: float = 0.0,
+) -> None:
+    """Warn when a network backend's budgets make `cache_deadline` unreachable.
 
     Parameters
     ----------
     cfg : CacheConfig
         Resolved configuration for the owning package.
+    label : str
+        Backend name for the message, e.g. 'Redis'.
+    timeout_name : str
+        Config field holding the per-attempt timeout in seconds.
+    retry_name : str
+        Config field holding the retries added on top of the first attempt.
+    retry_sleep_ceiling : float, default 0.0
+        Worst-case seconds the client sleeps BETWEEN retries, on top of
+        the per-attempt timeouts. Zero for redis-py, whose default backoff
+        caps at half a second total; botocore's standard mode sleeps up to
+        `min(2**attempt, 20)` seconds per retry.
 
     Notes
     -----
-    - redis-py retries INSIDE a single operation and applies the timeout to
-      the connect and the read, so one uninterruptible call costs up to
-      `redis_socket_timeout * (1 + redis_retry_count)`. cachu shares one
-      connect attempt across every resolved address, so the address count
-      adds a fifth of the budget per extra address rather than multiplying
-      the figure by the address count.
+    - Both redis-py and botocore retry INSIDE a single operation and apply
+      the timeout per attempt, so one uninterruptible call costs up to
+      `timeout * (1 + retry_count)` plus the retry sleeps. For Redis,
+      cachu shares one connect attempt across every resolved address, so
+      the address count adds a fifth of the budget per extra address
+      rather than multiplying the figure by the address count.
     - `cache_deadline` is only checked between steps, so a call already
       blocked in a socket read runs to completion. With the shipped defaults
       that floor is 5.0 * 4 = 20 s, which swamps a 1 s deadline entirely.
     - The mutex release in the `finally` is not gated on the budget either,
       so a call that held the lock can overrun by twice that floor.
-    - Deriving the socket timeout from the deadline instead of warning was
+    - Deriving the timeout from the deadline instead of warning was
       measured to be worse: it silently overrode an explicitly configured
       value and, on a healthy but slow endpoint, timed out every read and
       write - turning the cache into a 100% miss while `fail_open` hid it.
@@ -45,17 +62,22 @@ def _warn_if_deadline_unenforceable(cfg: CacheConfig) -> None:
     if cfg.cache_deadline is None:
         return
 
-    per_operation = cfg.redis_socket_timeout * (1 + cfg.redis_retry_count)
-    if per_operation <= cfg.cache_deadline:
+    timeout = getattr(cfg, timeout_name)
+    retry_count = getattr(cfg, retry_name)
+    per_operation = timeout * (1 + retry_count)
+    if per_operation + retry_sleep_ceiling <= cfg.cache_deadline:
         return
 
+    backoff_clause = (
+        f' plus up to {retry_sleep_ceiling:g}s of retry backoff'
+        if retry_sleep_ceiling else '')
     logger.warning(
-        f'cache_deadline={cfg.cache_deadline}s cannot be honoured: one Redis '
-        f'operation may block for redis_socket_timeout * (1 + '
-        f'redis_retry_count) = {cfg.redis_socket_timeout} * '
-        f'{1 + cfg.redis_retry_count} = {per_operation:g}s, and an in-flight '
-        f'call cannot be interrupted. Lower redis_socket_timeout and '
-        f'redis_retry_count to bring the worst case near the deadline.')
+        f'cache_deadline={cfg.cache_deadline}s cannot be honored: one '
+        f'{label} operation may block for {timeout_name} * (1 + '
+        f'{retry_name}) = {timeout} * {1 + retry_count} = '
+        f'{per_operation:g}s{backoff_clause}, and an in-flight call cannot '
+        f'be interrupted. Lower {timeout_name} and {retry_name} to bring '
+        f'the worst case near the deadline.')
 
 
 class CacheManager:
@@ -114,13 +136,38 @@ class CacheManager:
             backend = SqliteBackend(filepath)
         elif backend_type == 'redis':
             from .backends.redis import RedisBackend
-            _warn_if_deadline_unenforceable(cfg)
+            _warn_if_deadline_unenforceable(
+                cfg, 'Redis', 'redis_socket_timeout', 'redis_retry_count')
             backend = RedisBackend(
                 cfg.redis_url,
                 cfg.lock_timeout,
                 cfg.redis_health_check_interval,
                 cfg.redis_socket_timeout,
                 cfg.redis_retry_count,
+            )
+        elif backend_type == 'dynamodb':
+            from .backends.dynamodb import DynamoDBBackend
+
+            # Notes:
+            # - botocore's standard retry mode sleeps up to
+            #   random() * min(2**attempt, 20) seconds between retries,
+            #   on top of the per-attempt timeouts; the ceiling below is
+            #   that sum's upper bound, without which a deadline in the
+            #   gap would silently look honorable.
+            backoff_ceiling = float(sum(
+                min(2 ** attempt, 20)
+                for attempt in range(cfg.dynamodb_retry_count)))
+            _warn_if_deadline_unenforceable(
+                cfg, 'DynamoDB', 'dynamodb_timeout', 'dynamodb_retry_count',
+                retry_sleep_ceiling=backoff_ceiling)
+            backend = DynamoDBBackend(
+                cfg.dynamodb_table,
+                cfg.lock_timeout,
+                cfg.dynamodb_region,
+                cfg.dynamodb_endpoint_url,
+                cfg.dynamodb_timeout,
+                cfg.dynamodb_retry_count,
+                cfg.dynamodb_consistent_reads,
             )
         elif backend_type == 'null':
             from .backends.null import NullBackend
@@ -162,7 +209,7 @@ class CacheManager:
         - Tags ACCUMULATE per region, because one (package, backend, ttl)
           region is shared by every decorator that resolves to it. Recording
           them is what lets a tag-scoped clear skip the regions that cannot
-          hold that tag, instead of dialling every backend the package
+          hold that tag, instead of dialing every backend the package
           declared anywhere.
         - The empty tag is not recorded: it is the decorator default, so
           treating it as a tag would make `tag=''` read as "the untagged
@@ -448,7 +495,7 @@ def get_backend(
     """Get a backend instance.
 
     Args:
-        backend_type: 'memory', 'file', or 'redis'. Uses config default if None.
+        backend_type: 'memory', 'file', 'redis', 'dynamodb' or 'null'. Uses config default if None.
         package: Package name. Auto-detected if None.
         ttl: TTL in seconds (used for backend separation).
     """
@@ -471,7 +518,7 @@ async def aget_backend(
     """Get a backend instance (async).
 
     Args:
-        backend_type: 'memory', 'file', or 'redis'. Uses config default if None.
+        backend_type: 'memory', 'file', 'redis', 'dynamodb' or 'null'. Uses config default if None.
         package: Package name. Auto-detected if None.
         ttl: TTL in seconds (used for backend separation).
     """
