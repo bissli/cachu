@@ -1,4 +1,4 @@
-"""Targeted tests for DynamoDB backend internals moto can reach.
+"""Targeted tests for DynamoDB backend internals against DynamoDB Local.
 
 Covers the behaviors the generic suites cannot see: lazy native TTL vs
 the client-side expiry check, the hashed partition key, scan narrowing vs
@@ -6,14 +6,17 @@ fnmatch authority, the token-guarded lock takeover, stats buffering, and
 the configuration knobs.
 """
 import asyncio
+import concurrent.futures
 import logging
 import math
 import pickle
+import threading
 import time
 
 import cachu
 import pytest
 from _fixtures.dynamodb import TABLE_NAME
+from botocore.exceptions import ClientError
 from cachu.api import NO_VALUE
 from cachu.backends.dynamodb import DynamoDBBackend, _pk, create_dynamodb_table
 from cachu.exception import ConfigurationError
@@ -22,14 +25,48 @@ from cachu.util import make_clear_pattern
 
 
 @pytest.fixture
-def backend(dynamodb_mock):
-    """Provide a DynamoDBBackend against the mocked table.
+def backend(dynamodb_table):
+    """Provide a DynamoDBBackend against the DynamoDB Local table.
     """
     return DynamoDBBackend(TABLE_NAME)
 
 
+@pytest.fixture
+def bare_table(backend):
+    """Provide a second table with native TTL never enabled.
+
+    Notes
+    -----
+    - DynamoDB Local's TTL sweep really deletes expired rows about
+      every 10 seconds, so a takeover test that sleeps past a lock's
+      expiry can lose its teeth mid-run: the sweeper collects the row
+      and acquire() exercises the fresh attribute_not_exists branch
+      instead of the takeover clause. With TTL never enabled, rows
+      survive until deleted.
+    - Dropped by `dynamodb_table`'s drop-every-table teardown.
+    """
+    backend.client.create_table(
+        TableName='cachu-bare',
+        BillingMode='PAY_PER_REQUEST',
+        AttributeDefinitions=[
+            {'AttributeName': 'key', 'AttributeType': 'S'},
+            ],
+        KeySchema=[
+            {'AttributeName': 'key', 'KeyType': 'HASH'},
+            ])
+    backend.client.get_waiter('table_exists').wait(TableName='cachu-bare')
+    return 'cachu-bare'
+
+
 def _put_raw(backend, key, attrs):
     """Write a raw item so tests can craft rows the backend never writes.
+
+    Notes
+    -----
+    - Rows deliberately omit 'expires_ttl': DynamoDB Local really
+      collects expired rows on a roughly 10-second sweep (real AWS
+      takes days), and the hand-crafted expired rows must stay put for
+      the client-side expiry assertions to mean anything.
     """
     item = {'key': {'S': _pk(key)}, 'key_text': {'S': key}}
     item.update(attrs)
@@ -163,7 +200,7 @@ class TestHashedPartitionKey:
         assert '.' not in ttl_attr
         assert int(ttl_attr) == math.ceil(float(item['expires_at']['N']))
 
-    def test_retry_config_counts_total_attempts(self, dynamodb_mock):
+    def test_retry_config_counts_total_attempts(self, dynamodb_table):
         """retry_count buys exactly that many retries on top of the first try.
 
         Mutation: passing 'max_attempts': retry_count + 1, which botocore
@@ -203,9 +240,9 @@ class TestScanNarrowing:
         """A pattern opening with a metacharacter sends no begins_with at all.
 
         Mutation: building begins_with with an empty-string operand
-        whenever a pattern is given - moto accepts the empty operand and
-        matches everything, so only the emitted request parameters can
-        catch it.
+        whenever a pattern is given - the engine accepts the empty
+        operand and matches every key, so only the emitted request
+        parameters can catch it.
         Oracle: the Scan parameters captured off the client's event bus.
         """
         backend.set('5m:a:fn|x=1', 'v1', 300)
@@ -222,13 +259,13 @@ class TestScanNarrowing:
             assert 'begins_with' not in params.get('FilterExpression', '')
             assert ':prefix' not in params.get('ExpressionAttributeValues', {})
 
-    def test_consistent_reads_flag_reaches_the_wire(self, dynamodb_mock):
+    def test_consistent_reads_flag_reaches_the_wire(self, dynamodb_table):
         """consistent_reads=False is sent on every GetItem and Scan.
 
-        Mutation: pinning ConsistentRead=True at any call site - moto
-        answers identically either way, but real DynamoDB bills strongly
-        consistent reads at double, so the README's cost lever must
-        actually reach the wire.
+        Mutation: pinning ConsistentRead=True at any call site - the
+        single-node DynamoDB Local answers identically either way, but
+        real DynamoDB bills strongly consistent reads at double, so the
+        README's cost lever must actually reach the wire.
         Oracle: the request parameters captured off the client's event bus.
         """
         b = DynamoDBBackend(TABLE_NAME, consistent_reads=False)
@@ -302,17 +339,19 @@ class TestDynamoDBMutexTokens:
         m1.release()
         assert m2.acquire(timeout=0) is True
 
-    def test_release_after_takeover_keeps_new_owner_locked(self, backend):
+    def test_release_after_takeover_keeps_new_owner_locked(self, backend, bare_table):
         """An expired holder's release cannot free the lock's new owner.
 
         Mutation: an unconditional DeleteItem in release, or dropping the
         'expires_at < now' takeover clause from acquire.
         Oracle: a third caller's single-attempt acquire, which must still
-        fail after the stale holder's release.
+        fail after the stale holder's release. On `bare_table` so the
+        engine's TTL sweep cannot collect the expired row first, which
+        would let m2 acquire fresh without exercising the takeover.
         """
-        m1 = DynamoDBMutex(backend.client, TABLE_NAME, 'lock:k', 0.5)
-        m2 = DynamoDBMutex(backend.client, TABLE_NAME, 'lock:k', 10.0)
-        m3 = DynamoDBMutex(backend.client, TABLE_NAME, 'lock:k', 10.0)
+        m1 = DynamoDBMutex(backend.client, bare_table, 'lock:k', 0.5)
+        m2 = DynamoDBMutex(backend.client, bare_table, 'lock:k', 10.0)
+        m3 = DynamoDBMutex(backend.client, bare_table, 'lock:k', 10.0)
 
         assert m1.acquire(timeout=0) is True
         time.sleep(1.1)
@@ -337,6 +376,30 @@ class TestDynamoDBMutexTokens:
         assert m1.acquire(timeout=0) is True
         assert m2.acquire(timeout=0.45) is False
 
+    def test_racing_acquirers_produce_exactly_one_holder(self, backend):
+        """Simultaneous acquirers on one key produce exactly one winner.
+
+        Mutation: swapping the conditional put for a read-then-put -
+        the sequential exclusion test above still passes, because the
+        first write is already visible by the time the second caller
+        reads, and only a genuine race exposes the lost condition.
+        Oracle: winner count across eight threads released together
+        against an engine that serializes conditional writes.
+        """
+        mutexes = [
+            DynamoDBMutex(backend.client, TABLE_NAME, 'lock:race', 30.0)
+            for _ in range(8)
+            ]
+        barrier = threading.Barrier(8)
+
+        def race(mutex):
+            barrier.wait()
+            return mutex.acquire(timeout=0)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+            results = list(pool.map(race, mutexes))
+        assert results.count(True) == 1
+
     async def test_async_contended_lock_excludes_second_acquirer(self, backend):
         """The async lock is exclusive and released by its owner.
 
@@ -354,16 +417,17 @@ class TestDynamoDBMutexTokens:
         await m1.release()
         assert await m2.acquire(timeout=0) is True
 
-    async def test_async_release_after_takeover_keeps_new_owner_locked(self, backend):
+    async def test_async_release_after_takeover_keeps_new_owner_locked(self, backend, bare_table):
         """The async release is token-guarded exactly as the sync one.
 
         Mutation: an unconditional delete in the delegated release path.
         Oracle: a third caller's single-attempt acquire after the stale
-        holder's release.
+        holder's release. On `bare_table` for the same TTL-sweep reason
+        as the sync takeover test.
         """
-        m1 = AsyncDynamoDBMutex(backend.client, TABLE_NAME, 'lock:k', 0.5)
-        m2 = AsyncDynamoDBMutex(backend.client, TABLE_NAME, 'lock:k', 10.0)
-        m3 = AsyncDynamoDBMutex(backend.client, TABLE_NAME, 'lock:k', 10.0)
+        m1 = AsyncDynamoDBMutex(backend.client, bare_table, 'lock:k', 0.5)
+        m2 = AsyncDynamoDBMutex(backend.client, bare_table, 'lock:k', 10.0)
+        m3 = AsyncDynamoDBMutex(backend.client, bare_table, 'lock:k', 10.0)
 
         assert await m1.acquire(timeout=0) is True
         await asyncio.sleep(1.1)
@@ -388,7 +452,7 @@ class TestStatsBuffering:
     """Stat increments are buffered locally and flushed to shared storage.
     """
 
-    def test_flushed_stats_visible_to_another_instance(self, backend, dynamodb_mock):
+    def test_flushed_stats_visible_to_another_instance(self, backend, dynamodb_table):
         """Counts survive the buffering and land in DynamoDB.
 
         Mutation: get_stats reading only the local buffer, or the flush
@@ -405,7 +469,26 @@ class TestStatsBuffering:
         other = DynamoDBBackend(TABLE_NAME)
         assert other.get_stats('fn') == (2, 1)
 
-    def test_close_flushes_buffered_stats(self, dynamodb_mock):
+    def test_stat_deltas_merge_across_instances(self, backend):
+        """Two instances' flushes accumulate on the shared counter row.
+
+        Mutation: flushing with SET instead of ADD in the update
+        expression - each flush then overwrites the other instance's
+        counts, and the single-writer test above cannot tell.
+        Oracle: hand-computed totals across two instances flushing in
+        turn - 2 hits and 1 miss, where overwriting would report 1 of
+        each.
+        """
+        other = DynamoDBBackend(TABLE_NAME)
+        backend.incr_stat('fn', 'hits')
+        backend.get_stats('fn')
+        other.incr_stat('fn', 'hits')
+        other.incr_stat('fn', 'misses')
+
+        assert other.get_stats('fn') == (2, 1)
+        assert backend.get_stats('fn') == (2, 1)
+
+    def test_close_flushes_buffered_stats(self, dynamodb_table):
         """close() pushes pending deltas before releasing the client.
 
         Mutation: dropping the flush from close, losing every count since
@@ -452,11 +535,58 @@ class TestBatchDelete:
         assert backend.count() == 0
 
 
+class TestScanPagination:
+    """Every scan path walks all pages, not just the engine's first MB.
+    """
+
+    def test_scan_paths_see_rows_past_the_first_page(self, backend):
+        """keys(), count() and clear() cover rows beyond the 1 MB page cap.
+
+        Mutation: replacing any paginator with a single Scan call -
+        rows on the second page silently vanish from keys(), count()
+        and clear(), and small-table tests never notice.
+        Oracle: 40 hand-written rows of 50 KB (about 2 MB, at least
+        two pages against the engine's documented 1 MB Scan limit),
+        every one of which must be seen by each path.
+        """
+        payload = 'x' * 50_000
+        for i in range(40):
+            backend.set(f'page-key-{i:02d}', payload, 300)
+
+        assert backend.count() == 40
+        assert sorted(backend.keys()) == [
+            f'page-key-{i:02d}' for i in range(40)]
+        assert backend.clear('page-key-*') == 40
+        assert backend.count() == 0
+
+
+class TestItemSizeCap:
+    """DynamoDB's 400 KB item cap surfaces out of set() instead of vanishing.
+    """
+
+    def test_oversized_value_error_escapes_set(self, backend):
+        """A value past the item cap raises; a smaller one on the path lands.
+
+        Mutation: wrapping the put in a swallow that turns the
+        documented 'oversized writes raise inside the backend' contract
+        into a silent no-write, which the decorator's best-effort write
+        handling would then hide forever.
+        Oracle: the engine's own 400 KB ValidationException for a
+        500 KB value, straddled by a 100 KB value that must succeed.
+        """
+        backend.set('fits', 'y' * 100_000, 300)
+        assert backend.get('fits') == 'y' * 100_000
+
+        with pytest.raises(ClientError):
+            backend.set('too-big', 'x' * 500_000, 300)
+        assert backend.get('too-big') is NO_VALUE
+
+
 class TestCreateTable:
     """create_dynamodb_table provisions, verifies, and is idempotent.
     """
 
-    def test_idempotent_and_fully_configured(self, backend, dynamodb_mock):
+    def test_idempotent_and_fully_configured(self, backend, dynamodb_table):
         """A second run leaves a correctly configured table in place.
 
         Mutation: neutering the update_time_to_live call (nothing else in
@@ -574,7 +704,7 @@ class TestDynamoDBConfiguration:
         with pytest.raises(ConfigurationError):
             cachu.configure(dynamodb_consistent_reads=1, package='ddbtest')
 
-    def test_configured_values_reach_the_backend(self, dynamodb_mock):
+    def test_configured_values_reach_the_backend(self, dynamodb_table):
         """Backend construction consumes the package's dynamodb settings.
 
         Mutation: the manager's dynamodb branch passing positional config
@@ -630,7 +760,7 @@ class TestCachedCount:
     """cache_info is answered from the count memo, not a Scan per call.
     """
 
-    def test_cache_info_scans_once_per_memo_window(self, dynamodb_mock):
+    def test_cache_info_scans_once_per_memo_window(self, dynamodb_table):
         """Repeated cache_info calls cost one table Scan, not one each.
 
         Mutation: falling through to count() per call - each cache_info

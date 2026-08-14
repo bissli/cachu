@@ -1164,8 +1164,9 @@ Points worth knowing before running it in production:
   `Scan`, and `BatchWriteItem` on the table; `create_dynamodb_table` additionally
   needs `CreateTable`, `DescribeTable`, `DescribeTimeToLive`, and
   `UpdateTimeToLive`.
-- **Local development.** Point `dynamodb_endpoint_url` at DynamoDB Local, or run
-  tests under [moto](https://github.com/getmoto/moto) as cachu's own suite does.
+- **Local development.** Point `dynamodb_endpoint_url` at [DynamoDB
+  Local](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/DynamoDBLocal.html);
+  cachu's own suite runs against it in a Docker container via testcontainers.
 
 ## Public API
 

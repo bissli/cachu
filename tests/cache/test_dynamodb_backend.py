@@ -16,8 +16,8 @@ class TestDynamoDBBackend(_GenericBackendTestSuiteWithTTL):
     backend = 'dynamodb'
 
     @pytest.fixture(autouse=True)
-    def setup_dynamodb(self, dynamodb_mock):
-        """Ensure the mocked DynamoDB table exists.
+    def setup_dynamodb(self, dynamodb_table):
+        """Ensure the DynamoDB Local table exists.
         """
 
 
@@ -28,8 +28,8 @@ class TestAsyncDynamoDBBackend(_GenericAsyncBackendTestSuite):
     backend = 'dynamodb'
 
     @pytest.fixture(autouse=True)
-    def setup_dynamodb(self, dynamodb_mock):
-        """Ensure the mocked DynamoDB table exists.
+    def setup_dynamodb(self, dynamodb_table):
+        """Ensure the DynamoDB Local table exists.
         """
 
 
@@ -38,8 +38,8 @@ class TestDynamoDBBackendDirect(_GenericDirectBackendTestSuite):
     """
 
     @pytest.fixture(autouse=True)
-    def setup_dynamodb(self, dynamodb_mock):
-        """Ensure the mocked DynamoDB table exists.
+    def setup_dynamodb(self, dynamodb_table):
+        """Ensure the DynamoDB Local table exists.
         """
 
     def create_backend(self):
@@ -54,8 +54,8 @@ class TestAsyncDynamoDBBackendDirect(_GenericAsyncDirectBackendTestSuite):
     """
 
     @pytest.fixture(autouse=True)
-    def setup_dynamodb(self, dynamodb_mock):
-        """Ensure the mocked DynamoDB table exists.
+    def setup_dynamodb(self, dynamodb_table):
+        """Ensure the DynamoDB Local table exists.
         """
 
     def create_backend(self):

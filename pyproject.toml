@@ -17,10 +17,9 @@ test = [
   "pytest-asyncio",
   "pytest-mock",
   "redis>=4.2.0",
-  "testcontainers[redis]",
+  "testcontainers[redis]>=4.13",
   "aiosqlite",
-  "boto3>=1.26",
-  "moto>=5",
+  "boto3>=1.28",
 ]
 
 [project.urls]
