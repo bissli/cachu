@@ -1,6 +1,6 @@
 [project]
 name = "cachu"
-version = "0.6.0"
+version = "0.6.1"
 description = "Flexible caching library with sync and async support for memory, file (SQLite), Redis, and DynamoDB backends"
 readme = "README.md"
 license = "0BSD"
